@@ -1,6 +1,6 @@
 # Facebook Marketing Plan for Movies
 
-## 1. Introduction & Executive Summary
+Introduction & Executive Summary
 ### 1.1 Project Idea
 Movie production is undoubtedly one of the most expensive and risky investments in today’s world. Producers would make every effort to secure a higher gross revenue. The entertainment industry goes hand in hand with the social media platforms, hence it is vital for companies to understand how to utilize the tools to maintain its presence in the social media platforms e.g. Facebook to promote their movies, engage with their supporters and ultimately boosting the box office revenues. As a marketing company, we assumed a movie producer came to us and requested for an effective digital marketing strategy on Facebook for their multimillion movie productions. Our goal is to analyze the marketing behaviors of previously released films and design an effective Facebook marketing activities for various types of movies to increase user engagement and maximize the box office revenue.
 
