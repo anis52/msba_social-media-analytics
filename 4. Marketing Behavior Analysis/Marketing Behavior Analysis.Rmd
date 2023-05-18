@@ -1,0 +1,1001 @@
+---
+title: "merge_cluster"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if(!require("pacman")){install.packages("pacman")}
+pacman::p_load(dplyr, data.table, scales, ggplot2, rsample, caret, h2o, recipes)
+
+ggplot2::theme_set(ggplot2::theme_light())
+options(scipen = 999)
+```
+
+```{r,message=FALSE, warning=FALSE,results='hide'}
+library(ggplot2)
+library(rsample)
+library(recipes)
+library(dplyr)
+library(caret)
+library(pROC)
+library(kernlab)
+library(tidyverse)
+library(gbm)
+library(xgboost)
+library(klaR)
+library(h2o)
+library(ranger)
+library(pdp)
+library(xgboost)
+```
+
+# movies_with_clusters
+```{r}
+movies_clusters <- read.csv("/Users/anis/Desktop/movies_with_clusters326.csv", header=T)
+```
+
+# 1 Data preprocessing
+
+## 1.1 Extract data about merge behavior
+```{r}
+library(dplyr)
+data_cluster <- movies_clusters[, -c(34:72)]
+data_cluster <- data_cluster[, -c(1)]
+data_cluster <- data_cluster[, -c(2,3,4,5,6)]
+# Besides "last_pub_after_out", all variables need log transformation
+data_log = data_cluster[,-c(3,17,28)]
+var_names <- names(data_log)
+dim(data_cluster)
+colnames(data_cluster)
+```
+```{r}
+data_cluster <- data_cluster[-c(180:203),]
+dim(data_cluster)
+```
+
+
+## 1.2 Divide data_cluster into three parts.
+```{r}
+data_cluster0 = data_cluster[which(data_cluster$feature_clusters== 0), ]
+data_cluster1 = data_cluster[which(data_cluster$feature_clusters== 1), ]
+data_cluster2 = data_cluster[which(data_cluster$feature_clusters== 2), ]
+```
+```{r}
+cv <- trainControl(
+    method = "repeatedcv",
+    number = 10,
+    repeats = 5
+)
+```
+
+
+# 2 For data_cluster0
+```{r}
+# drop "offer" "feature_clusters"
+cluster0 <- data_cluster0[,-c(17,28)]
+dim(cluster0)
+```
+
+## 2.1 bake
+```{r}
+library(dplyr)
+blueprint <- recipe(gross~., data = cluster0) %>% 
+    step_log(all_of(var_names),offset = 92) %>% 
+    step_center(all_numeric(),-all_outcomes()) %>% 
+    step_scale(all_numeric(),-all_outcomes())  
+
+prep_cluster0 <- prep(blueprint, training = cluster0)
+train0 <- bake(prep_cluster0, new_data = cluster0)
+```
+
+## 2.2 Random Forest
+### 2.2.1 Model without tuning parameter
+```{r}
+# number of features
+n_features0 <- length(setdiff(names(train0),"gross"))
+
+# train a default random forest model
+df_rf0 <- ranger(gross ~.,
+  data = train0,
+  mtry = floor(n_features0/3), 
+  respect.unordered.factors = "order",
+  seed = 7012)
+  
+# get OOB RMSE
+(default_rmse0 <- sqrt(df_rf0$prediction.error))
+```
+
+### 2.2.2 Full Cartesian hyperparameter search
+
+```{r}
+hyper_grid <- expand.grid(
+  mtry=floor(n_features0*c(.05,.15,.25,.333,.4)),
+  min.node.size = c(1,3,5,10),
+  replace = c(TRUE, FALSE),
+  sample.fraction = c(.5,.63,.8,.9,.92),
+  rmse = NA
+)
+```
+
+
+```{r}
+# execute full cartesian grid search
+for (i in seq_len(nrow(hyper_grid))){
+  # fit model for ith hyperparameter combination
+  fit0 <- ranger(
+    formula = gross ~ .,
+    data = train0,
+    num.trees = n_features0*10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 7012,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit0$prediction.error) # CV error
+}
+
+# assess top 10 models
+# "perc_gain" represents the % improvement of RMSE w.r.t baseline model
+library(dplyr)
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse0 - rmse)/default_rmse0*100) %>%
+  head(10)
+```
+### 2.2.3 Feature interpretation
+```{r}
+#re-run model with impurity-based variable importance
+rf_impurity0 <-ranger(
+  formula=gross~.,
+  data=train0,
+  num.trees=n_features0*10,
+  mtry=11,
+  min.node.size=1,
+  sample.fraction = 0.63,
+  replace=FALSE,
+  importance="impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed=7012
+)
+```
+
+#### Feature importance
+```{r}
+rf.p0 <- vip::vip(rf_impurity0,num_features=n_features0,scale=TRUE)
+rf.p0
+```
+```{r}
+p.v10<-partial(rf_impurity0,pred.var = "photo_t2")%>%autoplot()
+p.v20<-partial(rf_impurity0,pred.var = "average_post_t4")%>%autoplot()
+p.v30<-partial(rf_impurity0,pred.var = "video_t2")%>%autoplot()
+p.v40<-partial(rf_impurity0,pred.var = "similarity_score")%>%autoplot()
+p.v50<-partial(rf_impurity0,pred.var = "average_post_t5")%>%autoplot()
+p.v60<-partial(rf_impurity0,pred.var = "average_post_t2")%>%autoplot()
+p.v70<-partial(rf_impurity0,pred.var = "average_post_t7")%>%autoplot()
+p.v80<-partial(rf_impurity0,pred.var = "average_post_t3")%>%autoplot()
+p.v90<-partial(rf_impurity0,pred.var = "photo_t1")%>%autoplot()
+p.v100<-partial(rf_impurity0,pred.var = "link_t3")%>%autoplot()
+p.v110<-partial(rf_impurity0,pred.var = "average_post_t1")%>%autoplot()
+p.v120<-partial(rf_impurity0,pred.var = "first_pub_before_release")%>%autoplot()
+```
+```{r,warning=FALSE}
+gridExtra::grid.arrange(p.v10,p.v20,p.v30,p.v40,p.v50,p.v60,p.v70,p.v80,p.v90,p.v100,nrow=5)
+```
+```{r}
+p.v40
+```
+
+```{r}
+p.v120<-partial(rf_impurity0,pred.var = "starrate")%>%autoplot()
+p.v120
+```
+
+## 2.3 GBM
+
+```{r}
+# create a hyperparameter grid search
+sgb_hyper_grid <- expand.grid(
+  n.trees=100,
+  interaction.depth=c(3,5),
+  shrinkage =c(0.01,0.1),
+  n.minobsinnode=5
+)
+# set seed
+set.seed(123)
+# execute grid search with gbm model, use accuracy as preferred metric
+sgb_fit <- train(
+  blueprint,
+  data = train0,
+  method = 'gbm',
+  trControl = cv,
+  metric = "RMSE",
+  tuneGrid = sgb_hyper_grid
+)
+# print model results
+summary(sgb_fit)
+```
+
+```{r}
+gbm_model0 <-gbm(gross~.,n.trees=100, verbose=TRUE,interaction.depth = 3,shrinkage = 0.1,n.minobsinnode
+ = 5, data=train0)
+summary.gbm(gbm_model0)
+fi0 <- vip::vi(gbm_model0,scale=FALSE)
+
+partial(gbm_model0,pred.var = "photo_t2", n.trees = 100, type = "regression")%>%autoplot()
+```
+
+## 2.4 XGboost
+
+```{r}
+x <- data.matrix(train0[setdiff(names(train0),"gross")])
+y <- data.matrix(train0$gross)
+```
+
+```{r}
+#hyperparameter grid
+hyper_grid4 <- expand.grid(
+  eta = c(0.01,0.05),
+  max_depth = c(3,5),
+  min_child_weight = c(1,3),
+  subsample = c(0.5,0.8),
+  colsample_bytree = 0.5,
+  gamma = c(0,0.1,1),
+  lambda = c(0,0.1,1),
+  alpha = c(0,0.1,1),
+  rmse = 0,
+  trees = 0
+)
+```
+
+```{r}
+#grid search
+for(i in seq_len(nrow(hyper_grid4))) {
+  set.seed(233)
+  m <- xgb.cv(
+    data = x,
+    label = y,
+    nrounds = 500,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 50,
+    nfold = 10,
+    verbose = 0,
+    params = list(
+      eta = hyper_grid4$eta[i],
+      max_depth = hyper_grid4$max_depth[i],
+      min_child_weight = hyper_grid4$min_child_weight[i],
+      subsample = hyper_grid4$subsample[i],
+      colsample_bytree = hyper_grid4$colsample_bytree[i],
+      gamma = hyper_grid4$gamma[i],
+      lambda = hyper_grid4$lambda[i],
+      alpha = hyper_grid4$alpha[i]
+  )
+  )
+  hyper_grid4$rmse[i] <- min(m$evaluation_log$test_rmse_mean)
+  hyper_grid4$trees[i] <- m$best_iteration
+}
+```
+
+```{r}
+arrange(hyper_grid4,rmse)
+```
+
+```{r}
+xgb1 <- xgboost(
+    data = x,
+    label = y,
+    nrounds = 61,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 50,
+    verbose = 0,
+    params = list(
+      eta = 0.1,
+      max_depth = 5,
+      min_child_weight = 1,
+      subsample = 0.5,
+      colsample_bytree = 0.5,
+      gamma = 0,
+      lambda = 0.1,
+      alpha = 0))
+```
+
+```{r}
+#important features
+p_xgb <- vip::vip(xgb1, num_features=10, scale=TRUE)
+gridExtra::grid.arrange(p_xgb)
+```
+
+
+# 3 For data_cluster1
+```{r}
+# drop "offer" "feature_clusters"
+cluster1 <- data_cluster1[,-c(17,28)]
+colnames(cluster1)
+```
+
+## 3.1 bake
+```{r}
+library(dplyr)
+blueprint <- recipe(gross~., data = cluster1) %>% 
+    step_log(all_of(var_names),offset = 92) %>%
+    step_center(all_numeric(),-all_outcomes()) %>% 
+    step_scale(all_numeric(),-all_outcomes())  
+
+prep_cluster1 <- prep(blueprint, training = cluster1)
+train1 <- bake(prep_cluster1, new_data = cluster1)
+```
+
+## 3.2 Random Forest
+### 3.2.1 Model without tuning parameter
+```{r}
+# number of features
+n_features1 <- length(setdiff(names(train1),"gross"))
+
+# train a default random forest model
+df_rf1 <- ranger(gross ~.,
+  data = train1,
+  mtry = floor(n_features1/3), 
+  respect.unordered.factors = "order",
+  seed = 7012)
+  
+# get OOB RMSE
+(default_rmse1 <- sqrt(df_rf1$prediction.error))
+```
+### 3.2.2 Full Cartesian hyperparameter search
+
+```{r}
+# execute full cartesian grid search
+for (i in seq_len(nrow(hyper_grid))){
+  # fit model for ith hyperparameter combination
+  fit1 <- ranger(
+    formula = gross ~ .,
+    data = train1,
+    num.trees = n_features1*10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 7012,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit1$prediction.error) # CV error
+}
+
+# assess top 10 models
+# "perc_gain" represents the % improvement of RMSE w.r.t baseline model
+library(dplyr)
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse1 - rmse)/default_rmse1*100) %>%
+  head(10)
+```
+### 3.2.3 Feature interpretation
+```{r}
+#re-run model with impurity-based variable importance
+rf_impurity1 <-ranger(
+  formula=gross~.,
+  data=train1,
+  num.trees=n_features1*10,
+  mtry=11,
+  min.node.size=5,
+  sample.fraction = 0.92,
+  replace=FALSE,
+  importance="impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed=7012
+)
+```
+
+#### Feature importance
+```{r}
+rf.p1<-vip::vip(rf_impurity1,num_features=n_features1,scale=TRUE)
+rf.p1
+```
+```{r}
+p.v11<-partial(rf_impurity1,pred.var = "similarity_score")%>%autoplot()
+p.v21<-partial(rf_impurity1,pred.var = "photo_t3")%>%autoplot()
+p.v31<-partial(rf_impurity1,pred.var = "photo_t1")%>%autoplot()
+p.v41<-partial(rf_impurity1,pred.var = "average_post_t3")%>%autoplot()
+p.v51<-partial(rf_impurity1,pred.var = "average_post_t4")%>%autoplot()
+p.v61<-partial(rf_impurity1,pred.var = "starrate")%>%autoplot()
+p.v71<-partial(rf_impurity1,pred.var = "photo_t2")%>%autoplot()
+p.v81<-partial(rf_impurity1,pred.var = "link_t2")%>%autoplot()
+p.v91<-partial(rf_impurity1,pred.var = "status_t2")%>%autoplot()
+p.v101<-partial(rf_impurity1,pred.var = "video_t1")%>%autoplot()
+```
+```{r,warning=FALSE}
+gridExtra::grid.arrange(p.v11,p.v21,p.v31,p.v41,p.v51,p.v61,p.v71,p.v81,p.v91,p.v101,nrow=5)
+```
+
+## 3.3 GBM
+
+```{r}
+# create a hyperparameter grid search
+sgb_hyper_grid <- expand.grid(
+  n.trees=100,
+  interaction.depth=c(3,5),
+  shrinkage =c(0.01,0.1),
+  n.minobsinnode=5
+)
+# set seed
+set.seed(123)
+# execute grid search with gbm model, use accuracy as preferred metric
+sgb_fit <- train(
+  blueprint,
+  data = train1,
+  method = 'gbm',
+  trControl = cv,
+  metric = "RMSE",
+  tuneGrid = sgb_hyper_grid
+)
+# print model results
+summary(sgb_fit)
+```
+
+```{r}
+gbm_model1 <-gbm(gross~.,n.trees=100, verbose=TRUE,interaction.depth = 3,shrinkage = 0.1,n.minobsinnode
+ = 5, data=train1)
+summary.gbm(gbm_model1)
+fi0 <- vip::vi(gbm_model1,scale=FALSE)
+
+partial(gbm_model1,pred.var = "photo_t2", n.trees = 100, type = "regression")%>%autoplot()
+```
+
+## 3.4 XGboost
+```{r}
+x2 <- data.matrix(train1[setdiff(names(train1),"gross")])
+y2 <- data.matrix(train1$gross)
+```
+
+```{r}
+#hyperparameter grid
+hyper_grid5 <- expand.grid(
+  eta = c(0.01,0.05),
+  max_depth = c(3,5),
+  min_child_weight = c(1,3),
+  subsample = c(0.5,0.8),
+  colsample_bytree = 0.5,
+  gamma = c(0,1,10),
+  lambda = c(0,0.1,1),
+  alpha = c(0,0.1,1),
+  rmse = 0,
+  trees = 0
+)
+```
+
+```{r}
+#grid search
+for(i in seq_len(nrow(hyper_grid5))) {
+  set.seed(233)
+  m <- xgb.cv(
+    data = x2,
+    label = y2,
+    nrounds = 500,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 50,
+    nfold = 10,
+    verbose = 0,
+    params = list(
+      eta = hyper_grid4$eta[i],
+      max_depth = hyper_grid4$max_depth[i],
+      min_child_weight = hyper_grid4$min_child_weight[i],
+      subsample = hyper_grid4$subsample[i],
+      colsample_bytree = hyper_grid4$colsample_bytree[i],
+      gamma = hyper_grid4$gamma[i],
+      lambda = hyper_grid4$lambda[i],
+      alpha = hyper_grid4$alpha[i]
+  )
+  )
+  hyper_grid5$rmse[i] <- min(m$evaluation_log$test_rmse_mean)
+  hyper_grid5$trees[i] <- m$best_iteration
+}
+```
+
+```{r}
+arrange(hyper_grid5,rmse)
+```
+
+```{r}
+xgb2 <- xgboost(
+    data = x2,
+    label = y2,
+    nrounds = 69,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 50,
+    verbose = 0,
+    params = list(
+      eta = 0.05,
+      max_depth = 5,
+      min_child_weight = 3,
+      subsample = 0.5,
+      colsample_bytree = 0.5,
+      gamma = 1,
+      lambda = 0.1,
+      alpha = 0))
+```
+
+### Fearture importance
+```{r}
+#important features
+p_xgb <- vip::vip(xgb2,num_features=10, scale=TRUE)
+gridExtra::grid.arrange(p_xgb)
+```
+
+```{r}
+partial(xgb2,pred.var = "average_post_t3", train =x2, type = "regression") %>% autoplot()
+partial(xgb2,pred.var = "average_post_t4", train =x2, type = "regression") %>% autoplot()
+partial(xgb2,pred.var = "photo_t3", train =x2, type = "regression") %>% autoplot()
+partial(xgb2,pred.var = "photo_t2", train =x2, type = "regression") %>% autoplot()
+partial(xgb2,pred.var = "photo_t1", train =x2, type = "regression") %>% autoplot()
+partial(xgb2,pred.var = "similarity_score", train =x2, type = "regression") %>% autoplot()
+```
+
+
+
+# 4 For data_cluster2
+```{r}
+# drop "offer" "feature_clusters"
+cluster2 <- data_cluster2[,-c(17,28)]
+colnames(cluster2)
+```
+
+## 4.1 bake
+```{r}
+library(dplyr)
+blueprint <- recipe(gross~., data = cluster2) %>% 
+    step_log(all_of(var_names),offset = 92) %>%
+    step_center(all_numeric(),-all_outcomes()) %>% 
+    step_scale(all_numeric(),-all_outcomes()) 
+
+prep_cluster2 <- prep(blueprint, training = cluster2)
+train2 <- bake(prep_cluster2, new_data = cluster2)
+```
+
+## 4.2 Random Forest
+### 4.2.1 Model without tuning parameter
+```{r}
+# number of features
+n_features2 <- length(setdiff(names(train2),"gross"))
+
+# train a default random forest model
+df_rf2 <- ranger(gross ~.,
+  data = train2,
+  mtry = floor(n_features2/3), 
+  respect.unordered.factors = "order",
+  seed = 7012)
+  
+# get OOB RMSE
+(default_rmse2 <- sqrt(df_rf2$prediction.error))
+```
+### 4.2.2 Full Cartesian hyperparameter search
+
+```{r}
+# execute full cartesian grid search
+for (i in seq_len(nrow(hyper_grid))){
+  # fit model for ith hyperparameter combination
+  fit2 <- ranger(
+    formula = gross ~ .,
+    data = train2,
+    num.trees = n_features2*10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 7012,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit2$prediction.error) # CV error
+}
+
+# assess top 10 models
+# "perc_gain" represents the % improvement of RMSE w.r.t baseline model
+library(dplyr)
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse2 - rmse)/default_rmse2*100) %>%
+  head(10)
+```
+### 4.2.3 Feature interpretation
+```{r}
+#re-run model with impurity-based variable importance
+rf_impurity2 <-ranger(
+  formula=gross~.,
+  data=train2,
+  num.trees=n_features2*10,
+  mtry=4,
+  min.node.size=3,
+  sample.fraction = 0.9,
+  replace=FALSE,
+  importance="impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed=7012
+)
+```
+
+#### Feature importance
+```{r}
+rf.p2<-vip::vip(rf_impurity2,num_features=10,scale=TRUE)
+rf.p2
+```
+```{r}
+p.v12<-partial(rf_impurity2,pred.var = "photo_t2")%>%autoplot()
+p.v22<-partial(rf_impurity2,pred.var = "video_t2")%>%autoplot()
+p.v32<-partial(rf_impurity2,pred.var = "video_t1")%>%autoplot()
+p.v42<-partial(rf_impurity2,pred.var = "status_t3")%>%autoplot()
+p.v52<-partial(rf_impurity2,pred.var = "first_pub_before_release")%>%autoplot()
+p.v62<-partial(rf_impurity2,pred.var = "question_t1")%>%autoplot()
+p.v72<-partial(rf_impurity2,pred.var = "photo_t1")%>%autoplot()
+p.v82<-partial(rf_impurity2,pred.var = "question_t2")%>%autoplot()
+p.v92<-partial(rf_impurity2,pred.var = "average_post_t4")%>%autoplot()
+p.v102<-partial(rf_impurity2,pred.var = "link_t3")%>%autoplot()
+```
+```{r,warning=FALSE}
+gridExtra::grid.arrange(p.v12,p.v22,p.v32,p.v42,p.v52,p.v62,p.v72,p.v82,p.v92,p.v102,nrow=5)
+```
+
+## 4.3 GBM
+
+```{r}
+# create a hyperparameter grid search
+sgb_hyper_grid <- expand.grid(
+  n.trees=100,
+  interaction.depth=c(3,5),
+  shrinkage =c(0.01,0.1),
+  n.minobsinnode=5
+)
+# set seed
+set.seed(123)
+# execute grid search with gbm model, use accuracy as preferred metric
+sgb_fit <- train(
+  blueprint,
+  data = train2,
+  method = 'gbm',
+  trControl = cv,
+  metric = "RMSE",
+  tuneGrid = sgb_hyper_grid
+)
+# print model results
+summary(sgb_fit)
+```
+
+```{r}
+gbm_model2 <-gbm(gross~.,n.trees=100, verbose=TRUE,interaction.depth = 3,shrinkage = 0.1,n.minobsinnode
+ = 5, data=train2)
+summary.gbm(gbm_model2)
+fi0 <- vip::vi(gbm_model2,scale=FALSE)
+
+partial(gbm_model2,pred.var = "photo_t2", n.trees = 100, type = "regression")%>%autoplot()
+```
+
+## 4.4 XGboost
+```{r}
+x3 <- data.matrix(train2[setdiff(names(train2),"gross")])
+y3 <- data.matrix(train2$gross)
+```
+
+```{r}
+#grid search
+for(i in seq_len(nrow(hyper_grid4))) {
+  set.seed(233)
+  m3 <- xgb.cv(
+    data = x3,
+    label = y3,
+    nrounds = 500,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 50,
+    nfold = 10,
+    verbose = 0,
+    params = list(
+      eta = hyper_grid4$eta[i],
+      max_depth = hyper_grid4$max_depth[i],
+      min_child_weight = hyper_grid4$min_child_weight[i],
+      subsample = hyper_grid4$subsample[i],
+      colsample_bytree = hyper_grid4$colsample_bytree[i],
+      gamma = hyper_grid4$gamma[i],
+      lambda = hyper_grid4$lambda[i],
+      alpha = hyper_grid4$alpha[i]
+  )
+  )
+  hyper_grid4$rmse[i] <- min(m3$evaluation_log$test_rmse_mean)
+  hyper_grid4$trees[i] <- m3$best_iteration
+}
+```
+
+```{r}
+arrange(hyper_grid4,rmse)
+```
+
+```{r}
+xgb3 <- xgboost(
+    data = x3,
+    label = y3,
+    nrounds = 145,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 50,
+    verbose = 0,
+    params = list(
+      eta = 0.05,
+      max_depth = 5,
+      min_child_weight = 3,
+      subsample = 0.5,
+      colsample_bytree = 0.5,
+      gamma = 0.1,
+      lambda = 0,
+      alpha = 0.1))
+```
+
+### Feature Importance
+```{r}
+#important features
+p_xgb <- vip::vip(xgb3, num_features=10, scale=TRUE)
+gridExtra::grid.arrange(p_xgb)
+```
+
+
+
+
+# 5 For data_cluster(total)
+```{r}
+# drop "offer" "feature_clusters"
+cluster <- data_cluster[,-c(17,28)]
+colnames(cluster)
+```
+## 5.1 bake
+```{r}
+library(dplyr)
+blueprint <- recipe(gross~., data = cluster) %>% 
+    step_log(all_of(var_names),offset = 92) %>%
+    step_center(all_numeric(),-all_outcomes()) %>% 
+    step_scale(all_numeric(),-all_outcomes())  
+
+prep_cluster <- prep(blueprint, training = cluster)
+train <- bake(prep_cluster, new_data = cluster)
+```
+
+## 5.2 Random Forest
+### 5.2.1 Model without tuning parameter
+```{r}
+# number of features
+n_features <- length(setdiff(names(train),"gross"))
+
+# train a default random forest model
+df_rf <- ranger(gross ~.,
+  data = train,
+  mtry = floor(n_features/3), 
+  respect.unordered.factors = "order",
+  seed = 7012)
+  
+# get OOB RMSE
+(default_rmse <- sqrt(df_rf$prediction.error))
+```
+### 5.2.2 Full Cartesian hyperparameter search
+
+```{r}
+# execute full cartesian grid search
+for (i in seq_len(nrow(hyper_grid))){
+  # fit model for ith hyperparameter combination
+  fit <- ranger(
+    formula = gross ~ .,
+    data = train,
+    num.trees = n_features*10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 7012,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit$prediction.error) # CV error
+}
+
+# assess top 10 models
+# "perc_gain" represents the % improvement of RMSE w.r.t baseline model
+library(dplyr)
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse - rmse)/default_rmse*100) %>%
+  head(10)
+```
+### 5.2.3 Feature interpretation
+```{r}
+#re-run model with impurity-based variable importance
+rf_impurity <-ranger(
+  formula=gross~.,
+  data=train,
+  num.trees=n_features*10,
+  mtry=7,
+  min.node.size=1,
+  sample.fraction = 0.9,
+  replace=FALSE,
+  importance="impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed=7012
+)
+```
+
+#### Feature importance
+```{r}
+rf.p<-vip::vip(rf_impurity,num_features=n_features,scale=TRUE)
+rf.p
+```
+```{r}
+p.v1<-partial(rf_impurity,pred.var = "average_post_t4")%>%autoplot()
+p.v2<-partial(rf_impurity,pred.var = "photo_t2")%>%autoplot()
+p.v3<-partial(rf_impurity,pred.var = "video_t2")%>%autoplot()
+p.v4<-partial(rf_impurity,pred.var = "video_t1")%>%autoplot()
+p.v5<-partial(rf_impurity,pred.var = "similarity_score")%>%autoplot()
+p.v6<-partial(rf_impurity,pred.var = "link_t2")%>%autoplot()
+p.v7<-partial(rf_impurity,pred.var = "photo_t3")%>%autoplot()
+p.v8<-partial(rf_impurity,pred.var = "photo_t1")%>%autoplot()
+p.v9<-partial(rf_impurity,pred.var = "average_post_t3")%>%autoplot()
+p.v10<-partial(rf_impurity,pred.var = "first_pub_before_release")%>%autoplot()
+```
+```{r,warning=FALSE}
+gridExtra::grid.arrange(p.v1,p.v2,p.v3,p.v4,p.v5,p.v6,p.v7,p.v8,p.v9,p.v10,nrow=5)
+```
+
+
+## 5.3 GBM
+
+```{r}
+# create a hyperparameter grid search
+sgb_hyper_grid <- expand.grid(
+  n.trees=100,
+  interaction.depth=c(3,5),
+  shrinkage =c(0.01,0.1),
+  n.minobsinnode=5
+)
+# set seed
+set.seed(123)
+# execute grid search with gbm model, use accuracy as preferred metric
+sgb_fit <- train(
+  blueprint,
+  data = train,
+  method = 'gbm',
+  trControl = cv,
+  metric = "RMSE",
+  tuneGrid = sgb_hyper_grid
+)
+# print model results
+summary(sgb_fit)
+```
+
+```{r}
+gbm_model <-gbm(gross~.,n.trees=100, verbose=TRUE,interaction.depth = 3,shrinkage = 0.1,n.minobsinnode
+ = 5, data=train)
+summary.gbm(gbm_model)
+fi0 <- vip::vi(gbm_model,scale=FALSE)
+
+partial(gbm_model,pred.var = "photo_t2", n.trees = 100, type = "regression")%>%autoplot()
+```
+
+## 5.4 XGboost
+```{r}
+x4 <- data.matrix(train[setdiff(names(train),"gross")])
+y4 <- data.matrix(train$gross)
+```
+
+```{r}
+#grid search
+for(i in seq_len(nrow(hyper_grid4))) {
+  set.seed(233)
+  m3 <- xgb.cv(
+    data = x3,
+    label = y3,
+    nrounds = 500,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 50,
+    nfold = 10,
+    verbose = 0,
+    params = list(
+      eta = hyper_grid4$eta[i],
+      max_depth = hyper_grid4$max_depth[i],
+      min_child_weight = hyper_grid4$min_child_weight[i],
+      subsample = hyper_grid4$subsample[i],
+      colsample_bytree = hyper_grid4$colsample_bytree[i],
+      gamma = hyper_grid4$gamma[i],
+      lambda = hyper_grid4$lambda[i],
+      alpha = hyper_grid4$alpha[i]
+  )
+  )
+  hyper_grid4$rmse[i] <- min(m3$evaluation_log$test_rmse_mean)
+  hyper_grid4$trees[i] <- m3$best_iteration
+}
+```
+
+```{r}
+arrange(hyper_grid4,rmse)
+```
+
+```{r}
+xgb4 <- xgboost(
+    data = x4,
+    label = y4,
+    nrounds = 215,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 50,
+    verbose = 0,
+    params = list(
+      eta = 0.05,
+      max_depth = 5,
+      min_child_weight = 3,
+      subsample = 0.5,
+      colsample_bytree = 0.5,
+      gamma = 0.1,
+      lambda = 0,
+      alpha = 0.1))
+```
+
+### Feature Importance
+```{r}
+#important features
+p_xgb <- vip::vip(xgb4, num_features=10, scale=TRUE)
+gridExtra::grid.arrange(p_xgb)
+```
+
+# 6. Linear regression
+
+## 6.1 interaction term
+
+```{r}
+data_30 <- movies_clusters[, c(2:33,73)]
+data_30 <- data_30[,-c(2:6)]
+data_30$feature_clusters<- as.factor(data_30$feature_clusters)
+data_log = data_30[,-c(28)]
+var_names <- names(data_log)
+```
+
+```{r}
+blueprint <- recipe(gross~., data = data_30) %>% 
+    step_corr(all_numeric(),-all_outcomes()) %>%
+    step_log(all_of(var_names),offset = 92) %>%
+    step_center(all_numeric(),-all_outcomes()) %>% 
+    step_scale(all_numeric(),-all_outcomes()) 
+prepare <- prep(blueprint, training = data_30)
+bake_all <- bake(prepare, new_data = data_30)
+```
+
+
+```{r}
+
+myfit0 <- lm(gross ~ .+feature_clusters*photo_t1+feature_clusters*photo_t2+feature_clusters*photo_t3+feature_clusters*link_t1+feature_clusters*link_t2+feature_clusters*link_t3+feature_clusters*question_t1+feature_clusters*question_t2+feature_clusters*question_t3+feature_clusters*video_t1+feature_clusters*video_t2+feature_clusters*video_t3+feature_clusters*status_t1+feature_clusters*status_t2+feature_clusters*status_t3+feature_clusters*average_post_t1+feature_clusters*average_post_t2+feature_clusters*average_post_t3+feature_clusters*average_post_t4+feature_clusters*average_post_t5+feature_clusters*average_post_t6+feature_clusters*average_post_t7+feature_clusters*first_pub_before_release+feature_clusters*last_pub_after_out, data=bake_all)
+summary(myfit0)
+```
+
+
+
+## 6.2 OLS 
+```{r}
+myfit01 <- lm(gross ~ ., data=train0)
+summary(myfit01)
+myfit02 <- lm(gross ~ ., data=train1)
+summary(myfit02)
+myfit03 <- lm(gross ~ ., data=train2)
+summary(myfit03)
+```
+
+
+
+
+
+
+
+
+

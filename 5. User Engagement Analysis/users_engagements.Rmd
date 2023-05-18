@@ -1,0 +1,1580 @@
+---
+title: "Users Engagements"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: '4'
+  word_document:
+    toc: yes
+    toc_depth: '4'
+  html_document:
+    code_folding: show
+    highlight: haddock
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+---
+\newpage
+
+```{r,message=FALSE, warning=FALSE,results='hide'}
+library(ggplot2)
+library(rsample)
+library(recipes)
+library(dplyr)
+library(caret)
+library(pROC)
+library(kernlab)
+library(tidyverse)
+library(gbm)
+library(xgboost)
+library(klaR)
+library(h2o)
+library(ranger)
+library(pdp)
+```
+
+```{r}
+data <- read.csv("movies_with_clusters.csv")[,c(-1,-3:-54)]
+dim(data)
+str(data)
+```
+
+#data preprocess
+
+```{r}
+data$feature_clusters<-as.factor(data$feature_clusters)
+data = data[which(data$review_cnt >= 80),]
+dim(data)
+str(data)
+```
+
+```{r}
+blueprint <- recipe(gross ~ ., data = data) %>% 
+  step_nzv(all_predictors()) %>%
+  step_log(all_numeric(), base = 10,offset=7) %>% # normalize to resolve numeric feature skewness
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes())
+```
+
+```{r}
+prep <- prep(blueprint, training = data)
+data<-bake(prep,new_data=data)
+```
+```{r}
+dim(data)
+str(data)
+```
+```{r}
+data_1 <- data[,c(-4,-8,-12,-15,-16,-18,-19)]
+dim(data_1)
+str(data_1)
+```
+
+```{r}
+data_all<-data_1[,c(-13)]
+```
+
+
+```{r}
+data_cluster0 = data_1[which(data_1$feature_clusters== 0), c(-13)]
+data_cluster1 = data_1[which(data_1$feature_clusters== 1), c(-13)]
+data_cluster2 = data_1[which(data_1$feature_clusters== 2), c(-13)]
+```
+
+
+```{r}
+dim(data_cluster0)
+str(data_cluster0)
+```
+
+```{r}
+dim(data_cluster1)
+str(data_cluster1)
+```
+```{r}
+dim(data_cluster2)
+str(data_cluster2)
+```
+
+# For all movies
+## Random Forest
+### Step 1: Model without tuning parameter
+```{r}
+# number of features
+n_features <- length(setdiff(names(data_all),"gross"))
+
+# train a default random forest model
+df_rf1 <- ranger(gross ~.,
+  data = data_all,
+  mtry = floor(n_features/3), 
+  respect.unordered.factors = "order",
+  seed = 7012)
+  
+  
+# get OOB RMSE
+(default_rmse <- sqrt(df_rf1$prediction.error))
+```
+
+
+
+### Step 2: Full Cartesian hyperparameter search
+
+Creating data frame of tuning parameters:
+```{r}
+# dataframe of combination of parameters
+# Searching across combinations of hyperparameter settings
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  mtry=floor(n_features*c(.05,.15,.25,.333,.4)),
+  min.node.size = c(1,3,5,10),
+  replace = c(TRUE, FALSE),
+  sample.fraction = c(.5,.63,.8,.9,.92),
+  rmse = NA
+)
+```
+
+```{r}
+# execute full cartesian grid search
+for (i in seq_len(nrow(hyper_grid))){
+  # fit model for ith hyperparameter combination
+  fit <- ranger(
+    formula = gross ~ .,
+    data = data_all,
+    num.trees = n_features*10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 7012,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit$prediction.error) # CV error
+}
+
+# assess top 10 models
+# "perc_gain" represents the % improvement of RMSE w.r.t baseline model
+library(dplyr)
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse - rmse)/default_rmse*100) %>%
+  head(10)
+```
+
+
+
+### Step 3: Feature interpretation
+```{r}
+#re-run model with impurity-based variable importance
+rf_impurity<-ranger(
+  formula=gross~.,
+  data=data_all,
+  num.trees=n_features*10,
+  mtry=4,
+  min.node.size=5,
+  sample.fraction = .8,
+  replace=TRUE,
+  importance="impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed=7012
+)
+rf.p1<-vip::vip(rf_impurity,num_features=n_features,scale=TRUE)
+rf.p1
+```
+```{r}
+p.v1<-partial(rf_impurity,pred.var = "avg_like_cnt_t2")%>%autoplot()
+p.v2<-partial(rf_impurity,pred.var = "avg_like_cnt_t3")%>%autoplot()
+p.v3<-partial(rf_impurity,pred.var = "pos_rate")%>%autoplot()
+p.v4<-partial(rf_impurity,pred.var = "avg_com_cnt_t2")%>%autoplot()
+p.v5<-partial(rf_impurity,pred.var = "avg_star_rating")%>%autoplot()
+p.v6<-partial(rf_impurity,pred.var = "avg_com_cnt_t3")%>%autoplot()
+p.v7<-partial(rf_impurity,pred.var = "avg_sen_score")%>%autoplot()
+p.v8<-partial(rf_impurity,pred.var = "avg_share_cnt_t3")%>%autoplot()
+p.v9<-partial(rf_impurity,pred.var = "avg_share_cnt_t2")%>%autoplot()
+```
+```{r,warning=FALSE}
+gridExtra::grid.arrange(p.v1,p.v2,p.v3,p.v4,p.v5,p.v6,p.v7,p.v8,p.v9,nrow=3)
+```
+
+## GBM
+
+###  Step 1: Run a basic implementation of GBM
+
+```{r}
+set.seed(12)
+system.time(gbm1<-gbm(
+  formula=gross~.,
+  data=data_all,
+  distribution = "gaussian",
+  n.trees=3000,
+  shrinkage=0.1,
+  interaction.depth=3,
+  n.minobsinnode = 10,
+  cv.folds = 10
+))
+```
+```{r}
+#find index for number trees with minimum CV error
+best<-which.min(gbm1$cv.error)
+#get MSE and compute RMSE
+sqrt(gbm1$cv.error[best])
+#plot error curve
+#training and cross-validated MSE as n trees are added to the GBM algorithm
+gbm.perf(gbm1,method="cv")
+```
+###  Step 2: fix tree hyperparameter and tune learning rate:
+```{r}
+#create grid search
+hyper_grid<-expand.grid(
+  learning_rate = c(0.3,0.1,0.05,0.01,0.005),
+  RMSE=NA,
+  trees=NA,
+  time=NA
+)
+```
+
+
+```{r}
+for(i in seq_len(nrow(hyper_grid))){
+  #fit gbm
+  set.seed(7012)   #for reproducibility
+  train_time<-system.time({
+    m<-gbm(
+      formula=gross~.,
+      data=data_all,
+      distribution = "gaussian",
+      n.trees=131,
+      shrinkage = hyper_grid$learning_rate[i],
+      interaction.depth = 3,
+      n.minobsinnode = 10,
+      cv.folds = 5
+    )
+  })
+  hyper_grid$RMSE[i]<-sqrt(min(m$cv.error))
+  hyper_grid$trees[i]<-which.min(m$cv.error)
+  hyper_grid$time[i]<-train_time[["elapsed"]]
+}
+```
+
+```{r}
+arrange(hyper_grid,RMSE)
+```
+
+###  Step 3: Tune tree-specific hyperpara.
+```{r}
+#search grid
+hyper_grid<-expand.grid(
+  n.trees=89,
+  shrinkage=0.1,
+  interaction.depth=c(3,5,7),
+  n.minobsinnode=c(5,10,15)
+)
+#create model fit function
+model_fit<-function(n.trees,shrinkage,interaction.depth,n.minobsinnode){
+  set.seed(7012)
+  m<-gbm(
+    formula=gross~.,
+    data=data_all,
+    distribution = "gaussian",
+    n.trees=n.trees,
+    shrinkage = shrinkage,
+    interaction.depth = interaction.depth,
+    n.minobsinnode = n.minobsinnode,
+    cv.folds = 5
+  )
+  #compute RMSE
+  sqrt(min(m$cv.error))
+}
+
+```
+
+```{r}
+hyper_grid$rmse<-purrr::pmap_dbl(
+  hyper_grid,
+  ~model_fit(
+    n.trees=..1,
+    shrinkage=..2,
+    interaction.depth = ..3,
+    n.minobsinnode = ..4
+  )
+)
+```
+
+```{r}
+head(arrange(hyper_grid,rmse))
+```
+
+### step 4:feature interpretation
+```{r}
+gbm.final<-gbm(
+    formula=gross~.,
+    data=data_all,
+    distribution = "gaussian",
+    n.trees=89,
+    shrinkage = 0.1,
+    interaction.depth = 5,
+    n.minobsinnode = 10
+)
+```
+```{r}
+vip::vip(gbm.final)
+```
+
+
+```{r}
+gbm.p.v1<-plot(gbm.final,"pos_rate")
+gbm.p.v2<-plot(gbm.final,"avg_sen_score")
+gbm.p.v3<-plot(gbm.final,"avg_star_rating")
+gbm.p.v4<-plot(gbm.final,"avg_like_cnt_t3")
+gbm.p.v5<-plot(gbm.final,"avg_like_cnt_t2")
+gbm.p.v6<-plot(gbm.final,"avg_like_cnt_t1")
+gbm.p.v7<-plot(gbm.final,"avg_share_cnt_t3")
+gbm.p.v8<-plot(gbm.final,"avg_com_cnt_t2")
+gbm.p.v9<-plot(gbm.final,"avg_com_cnt_t3")
+```
+
+```{r}
+gridExtra::grid.arrange(gbm.p.v1,gbm.p.v2,gbm.p.v3,gbm.p.v4,nrow=2)
+```
+
+```{r}
+gridExtra::grid.arrange(gbm.p.v5,gbm.p.v6,gbm.p.v7,gbm.p.v8,nrow=2)
+```
+
+
+## XGBoost
+
+### step 1:preprocessing
+```{r}
+X<-as.matrix(data_all[,-13])
+Y<-data_all$gross
+```
+```{r}
+dim(X)
+str(X)
+```
+### step 2:model without tuning parameter
+```{r}
+library(xgboost)
+```
+
+```{r}
+set.seed(7027)
+hp_xgb<-xgb.cv(
+  data=X, 
+  label=Y,
+  nrounds=4000,
+  objective="reg:squarederror",
+  early_stopping_rounds=50,
+  nfold=5,
+  params=list(
+    eta=0.05,
+    max_depth=3,
+    min_child_weight=3,
+    subsample=0.5,
+    colsample_bytree=0.5),
+  verbose=0
+)
+#minimum test CV RMSE
+min(hp_xgb$evaluation_log$test_rmse_mean)
+hp_xgb$best_iteration
+```
+
+### step 3:tuning parameters
+```{r}
+hyper_grid2<-expand.grid(
+  eta=0.01,
+  max_depth=3,
+  min_child_weight=3,
+  subsample=0.5,
+  colsample_bytree=0.5,
+  gamma=c(0,1,10,100),
+  lambda=c(0,1e-2,0.1,1,100),
+  alpha=c(0,1e-2,0.1,1,100),
+  rmse=NA,
+  trees=NA
+)
+```
+
+```{r}
+for(i in seq_len(nrow(hyper_grid2))){
+  set.seed(7012)
+  m2<-xgb.cv(
+    data=X,
+    label=Y,
+    nrounds=2000,
+    objective="reg:squarederror",
+    early_stopping_rounds=50,
+    nfold=5,
+    verbose=0,
+    params=list(
+      eta=hyper_grid2$eta[i],
+      max_depth=hyper_grid2$max_depth[i],
+      min_child_weight=hyper_grid2$min_child_weight[i],
+      subsample=hyper_grid2$subsample[i],
+      colsample_bytree=hyper_grid2$colsample_bytree[i],
+      gamma=hyper_grid2$gamma[i],
+      lambda=hyper_grid2$lambda[i],
+      alpha=hyper_grid2$alpha[i]
+    )
+  )
+  hyper_grid2$rmse[i]<-min(m2$evaluation_log$test_rmse_mean)
+  hyper_grid2$trees[i]<-m2$best_iteration
+}
+```
+
+
+```{r}
+head(arrange(hyper_grid2,rmse))
+```
+
+### step 4:feature interpretation
+```{r}
+set.seed(7027) 
+final_xgb <- xgboost::xgboost(
+  data = data.matrix(subset(data_all, select = -gross)),
+  label = data_all$gross, 
+  objective = "reg:squarederror", verbose = 0,
+  nrounds = 876, max_depth = 3, eta = 0.01, gamma = 0,lambda=0.01,alpha=0.1
+)
+```
+
+```{r}
+vip::vip(final_xgb)
+```
+
+
+```{r,warning=FALSE}
+# PDPs
+X <- subset(data_all, select = -gross)  # remove response
+xgb.p1<-partial(final_xgb, pred.var = "avg_like_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p2<-partial(final_xgb, pred.var = "avg_com_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p3<-partial(final_xgb, pred.var = "pos_rate", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p4<-partial(final_xgb, pred.var = "avg_star_rating", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+gridExtra::grid.arrange(xgb.p1,xgb.p2,xgb.p3,xgb.p4,nrow=2)
+```
+
+```{r,warning=FALSE}
+# PDPs
+X <- subset(data_all, select = -gross)  # remove response
+xgb.p1<-partial(final_xgb, pred.var = "avg_sen_score", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p2<-partial(final_xgb, pred.var = "avg_like_cnt_t3", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p3<-partial(final_xgb, pred.var = "avg_com_cnt_t3", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p4<-partial(final_xgb, pred.var = "avg_like_cnt_t1", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+gridExtra::grid.arrange(xgb.p1,xgb.p2,xgb.p3,xgb.p4,nrow=2)
+```
+
+
+# Intense Cluster
+
+## Random Forest
+
+### Step 1: Model without tuning parameter
+```{r}
+# number of features
+n_features <- length(setdiff(names(data_cluster0),"gross"))
+
+# train a default random forest model
+df_rf1 <- ranger(gross ~.,
+  data = data_cluster0,
+  mtry = floor(n_features/3), 
+  respect.unordered.factors = "order",
+  seed = 7012)
+  
+  
+# get OOB RMSE
+(default_rmse <- sqrt(df_rf1$prediction.error))
+```
+
+
+
+### Step 2: Full Cartesian hyperparameter search
+
+Creating data frame of tuning parameters:
+```{r}
+# dataframe of combination of parameters
+# Searching across combinations of hyperparameter settings
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  mtry=floor(n_features*c(.05,.15,.25,.333,.4)),
+  min.node.size = c(1,3,5,10),
+  replace = c(TRUE, FALSE),
+  sample.fraction = c(.5,.63,.8,.9,.92),
+  rmse = NA
+)
+```
+
+```{r}
+# execute full cartesian grid search
+for (i in seq_len(nrow(hyper_grid))){
+  # fit model for ith hyperparameter combination
+  fit <- ranger(
+    formula = gross ~ .,
+    data = data_cluster0,
+    num.trees = n_features*10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 7012,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit$prediction.error) # CV error
+}
+
+# assess top 10 models
+# "perc_gain" represents the % improvement of RMSE w.r.t baseline model
+library(dplyr)
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse - rmse)/default_rmse*100) %>%
+  head(10)
+```
+
+### Step 3: Feature interpretation
+```{r}
+#re-run model with impurity-based variable importance
+rf_impurity<-ranger(
+  formula=gross~.,
+  data=data_cluster0,
+  num.trees=n_features*10,
+  mtry=4,
+  min.node.size=5,
+  sample.fraction = .5,
+  replace=TRUE,
+  importance="impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed=7012
+)
+rf.p1<-vip::vip(rf_impurity,num_features=n_features,scale=TRUE)
+rf.p1
+```
+
+```{r}
+p.v1<-partial(rf_impurity,pred.var = "pos_rate")%>%autoplot()
+p.v2<-partial(rf_impurity,pred.var = "avg_like_cnt_t2")%>%autoplot()
+p.v3<-partial(rf_impurity,pred.var = "avg_com_cnt_t2")%>%autoplot()
+p.v4<-partial(rf_impurity,pred.var = "avg_com_cnt_t3")%>%autoplot()
+p.v5<-partial(rf_impurity,pred.var = "avg_like_cnt_t3")%>%autoplot()
+p.v6<-partial(rf_impurity,pred.var = "avg_share_cnt_t3")%>%autoplot()
+p.v7<-partial(rf_impurity,pred.var = "avg_share_cnt_t1")%>%autoplot()
+p.v8<-partial(rf_impurity,pred.var = "avg_star_rating")%>%autoplot()
+p.v9<-partial(rf_impurity,pred.var = "avg_sen_score")%>%autoplot()
+```
+```{r,warning=FALSE}
+gridExtra::grid.arrange(p.v1,p.v2,p.v3,p.v4,p.v5,p.v6,p.v7,p.v8,p.v9,nrow=3)
+```
+
+## GBM
+
+###  Step 1: Run a basic implementation of GBM
+
+```{r}
+set.seed(12)
+system.time(gbm1<-gbm(
+  formula=gross~.,
+  data=data_cluster0,
+  distribution = "gaussian",
+  n.trees=3000,
+  shrinkage=0.1,
+  interaction.depth=3,
+  n.minobsinnode = 5,
+  cv.folds = 10
+))
+```
+```{r}
+#find index for number trees with minimum CV error
+best<-which.min(gbm1$cv.error)
+#get MSE and compute RMSE
+sqrt(gbm1$cv.error[best])
+#plot error curve
+#training and cross-validated MSE as n trees are added to the GBM algorithm
+gbm.perf(gbm1,method="cv")
+```
+
+###  Step 2: fix tree hyperparameter and tune learning rate:
+```{r}
+#create grid search
+hyper_grid<-expand.grid(
+  learning_rate = c(0.3,0.1,0.05,0.01,0.005),
+  RMSE=NA,
+  trees=NA,
+  time=NA
+)
+```
+
+
+```{r}
+for(i in seq_len(nrow(hyper_grid))){
+  #fit gbm
+  set.seed(7012)   #for reproducibility
+  train_time<-system.time({
+    m<-gbm(
+      formula=gross~.,
+      data=data_cluster0,
+      distribution = "gaussian",
+      n.trees=100,
+      shrinkage = hyper_grid$learning_rate[i],
+      interaction.depth = 3,
+      n.minobsinnode = 5,
+      cv.folds = 5
+    )
+  })
+  hyper_grid$RMSE[i]<-sqrt(min(m$cv.error))
+  hyper_grid$trees[i]<-which.min(m$cv.error)
+  hyper_grid$time[i]<-train_time[["elapsed"]]
+}
+```
+
+```{r}
+arrange(hyper_grid,RMSE)
+```
+
+###  Step 3: Tune tree-specific hyperpara.
+```{r}
+#search grid
+hyper_grid<-expand.grid(
+  n.trees=22,
+  shrinkage=0.1,
+  interaction.depth=c(3,5,7),
+  n.minobsinnode=c(1,3,5)
+)
+#create model fit function
+model_fit<-function(n.trees,shrinkage,interaction.depth,n.minobsinnode){
+  set.seed(7012)
+  m<-gbm(
+    formula=gross~.,
+    data=data_cluster0,
+    distribution = "gaussian",
+    n.trees=n.trees,
+    shrinkage = shrinkage,
+    interaction.depth = interaction.depth,
+    n.minobsinnode = n.minobsinnode,
+    cv.folds = 5
+  )
+  #compute RMSE
+  sqrt(min(m$cv.error))
+}
+
+```
+
+```{r}
+hyper_grid$rmse<-purrr::pmap_dbl(
+  hyper_grid,
+  ~model_fit(
+    n.trees=..1,
+    shrinkage=..2,
+    interaction.depth = ..3,
+    n.minobsinnode = ..4
+  )
+)
+```
+
+```{r}
+head(arrange(hyper_grid,rmse))
+```
+
+### step 4:feature interpretation
+```{r}
+gbm.final<-gbm(
+    formula=gross~.,
+    data=data_cluster0,
+    distribution = "gaussian",
+    n.trees=22,
+    shrinkage = 0.1,
+    interaction.depth = 3,
+    n.minobsinnode = 5
+)
+```
+```{r}
+vip::vip(gbm.final)
+```
+
+```{r}
+gbm.p.v1<-plot(gbm.final,"pos_rate")
+gbm.p.v2<-plot(gbm.final,"avg_com_cnt_t2")
+gbm.p.v3<-plot(gbm.final,"avg_like_cnt_t1")
+gbm.p.v4<-plot(gbm.final,"avg_star_rating")
+gbm.p.v5<-plot(gbm.final,"avg_sen_score")
+gbm.p.v6<-plot(gbm.final,"avg_share_cnt_t1")
+gbm.p.v7<-plot(gbm.final,"avg_com_cnt_t1")
+gbm.p.v8<-plot(gbm.final,"avg_like_cnt_t2")
+gbm.p.v9<-plot(gbm.final,"avg_com_cnt_t3")
+```
+
+```{r}
+gridExtra::grid.arrange(gbm.p.v1,gbm.p.v2,gbm.p.v3,gbm.p.v4,nrow=2)
+```
+
+```{r}
+gridExtra::grid.arrange(gbm.p.v5,gbm.p.v6,gbm.p.v7,gbm.p.v8,nrow=2)
+```
+
+
+## XGBoost
+
+### step 1:preprocessing
+```{r}
+X<-as.matrix(data_cluster0[,-13])
+Y<-data_cluster0$gross
+```
+```{r}
+dim(X)
+str(X)
+```
+### step 2:model without tuning parameter
+```{r}
+library(xgboost)
+```
+
+```{r}
+set.seed(7027)
+hp_xgb<-xgb.cv(
+  data=X, 
+  label=Y,
+  nrounds=4000,
+  objective="reg:squarederror",
+  early_stopping_rounds=50,
+  nfold=5,
+  params=list(
+    eta=0.05,
+    max_depth=3,
+    min_child_weight=3,
+    subsample=0.5,
+    colsample_bytree=0.5),
+  verbose=0
+)
+#minimum test CV RMSE
+min(hp_xgb$evaluation_log$test_rmse_mean)
+hp_xgb$best_iteration
+```
+
+### step 3:tuning parameters
+```{r}
+hyper_grid2<-expand.grid(
+  eta=0.01,
+  max_depth=3,
+  min_child_weight=3,
+  subsample=0.5,
+  colsample_bytree=0.5,
+  gamma=c(0,1,10,100),
+  lambda=c(0,1e-2,0.1,1,100),
+  alpha=c(0,1e-2,0.1,1,100),
+  rmse=NA,
+  trees=NA
+)
+```
+
+```{r}
+for(i in seq_len(nrow(hyper_grid2))){
+  set.seed(7012)
+  m2<-xgb.cv(
+    data=X,
+    label=Y,
+    nrounds=2000,
+    objective="reg:squarederror",
+    early_stopping_rounds=50,
+    nfold=5,
+    verbose=0,
+    params=list(
+      eta=hyper_grid2$eta[i],
+      max_depth=hyper_grid2$max_depth[i],
+      min_child_weight=hyper_grid2$min_child_weight[i],
+      subsample=hyper_grid2$subsample[i],
+      colsample_bytree=hyper_grid2$colsample_bytree[i],
+      gamma=hyper_grid2$gamma[i],
+      lambda=hyper_grid2$lambda[i],
+      alpha=hyper_grid2$alpha[i]
+    )
+  )
+  hyper_grid2$rmse[i]<-min(m2$evaluation_log$test_rmse_mean)
+  hyper_grid2$trees[i]<-m2$best_iteration
+}
+```
+
+
+```{r}
+head(arrange(hyper_grid2,rmse))
+```
+
+### step 4:feature interpretation
+```{r}
+set.seed(7027) 
+final_xgb <- xgboost::xgboost(
+  data = data.matrix(subset(data_cluster0, select = -gross)),
+  label = data_cluster0$gross, 
+  objective = "reg:squarederror", verbose = 0,
+  nrounds = 538, max_depth = 3, eta = 0.01, gamma = 0,lambda=0.1,alpha=0
+)
+```
+
+```{r}
+vip::vip(final_xgb)
+```
+
+```{r,warning=FALSE}
+# PDPs
+X <- subset(data_cluster0, select = -gross)  # remove response
+xgb.p1<-partial(final_xgb, pred.var = "pos_rate", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p2<-partial(final_xgb, pred.var = "avg_com_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p3<-partial(final_xgb, pred.var = "avg_sen_score", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p4<-partial(final_xgb, pred.var = "avg_com_cnt_t3", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+gridExtra::grid.arrange(xgb.p1,xgb.p2,xgb.p3,xgb.p4,nrow=2)
+```
+
+```{r,warning=FALSE}
+# PDPs
+X <- subset(data_cluster0, select = -gross)  # remove response
+xgb.p1<-partial(final_xgb, pred.var = "avg_star_rating", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p2<-partial(final_xgb, pred.var = "avg_like_cnt_t3", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p3<-partial(final_xgb, pred.var = "avg_like_cnt_t1", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p4<-partial(final_xgb, pred.var = "avg_share_cnt_t3", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+gridExtra::grid.arrange(xgb.p1,xgb.p2,xgb.p3,xgb.p4,nrow=2)
+```
+
+# Relaxing Cluster
+
+## Random Forest
+
+### Step 1: Model without tuning parameter
+```{r}
+# number of features
+n_features <- length(setdiff(names(data_cluster1),"gross"))
+
+# train a default random forest model
+df_rf1 <- ranger(gross ~.,
+  data = data_cluster1,
+  mtry = floor(n_features/3), 
+  respect.unordered.factors = "order",
+  seed = 7012)
+  
+  
+# get OOB RMSE
+(default_rmse <- sqrt(df_rf1$prediction.error))
+```
+
+
+
+### Step 2: Full Cartesian hyperparameter search
+
+Creating data frame of tuning parameters:
+```{r}
+# dataframe of combination of parameters
+# Searching across combinations of hyperparameter settings
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  mtry=floor(n_features*c(.05,.15,.25,.333,.4)),
+  min.node.size = c(1,3,5,10),
+  replace = c(TRUE, FALSE),
+  sample.fraction = c(.5,.63,.8,.9,.92),
+  rmse = NA
+)
+```
+
+```{r}
+# execute full cartesian grid search
+for (i in seq_len(nrow(hyper_grid))){
+  # fit model for ith hyperparameter combination
+  fit <- ranger(
+    formula = gross ~ .,
+    data = data_cluster1,
+    num.trees = n_features*10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 7012,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit$prediction.error) # CV error
+}
+
+# assess top 10 models
+# "perc_gain" represents the % improvement of RMSE w.r.t baseline model
+library(dplyr)
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse - rmse)/default_rmse*100) %>%
+  head(10)
+```
+
+### Step 3: Feature interpretation
+```{r}
+#re-run model with impurity-based variable importance
+rf_impurity<-ranger(
+  formula=gross~.,
+  data=data_cluster1,
+  num.trees=n_features*10,
+  mtry=4,
+  min.node.size=10,
+  sample.fraction = .5,
+  replace=TRUE,
+  importance="impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed=7012
+)
+rf.p1<-vip::vip(rf_impurity,num_features=n_features,scale=TRUE)
+rf.p1
+```
+
+```{r}
+p.v1<-partial(rf_impurity,pred.var = "avg_star_rating")%>%autoplot()
+p.v2<-partial(rf_impurity,pred.var = "pos_rate")%>%autoplot()
+p.v3<-partial(rf_impurity,pred.var = "avg_share_cnt_t3")%>%autoplot()
+p.v4<-partial(rf_impurity,pred.var = "avg_share_cnt_t1")%>%autoplot()
+p.v5<-partial(rf_impurity,pred.var = "avg_com_cnt_t3")%>%autoplot()
+p.v6<-partial(rf_impurity,pred.var = "avg_com_cnt_t2")%>%autoplot()
+p.v7<-partial(rf_impurity,pred.var = "avg_like_cnt_t3")%>%autoplot()
+p.v8<-partial(rf_impurity,pred.var = "avg_share_cnt_t2")%>%autoplot()
+p.v9<-partial(rf_impurity,pred.var = "avg_like_cnt_t1")%>%autoplot()
+```
+```{r,warning=FALSE}
+gridExtra::grid.arrange(p.v1,p.v2,p.v3,p.v4,p.v5,p.v6,p.v7,p.v8,p.v9,nrow=3)
+```
+
+## GBM
+
+###  Step 1: Run a basic implementation of GBM
+
+```{r}
+set.seed(7012)
+system.time(gbm1<-gbm(
+  formula=gross~.,
+  data=data_cluster1,
+  distribution = "gaussian",
+  n.trees=3000,
+  shrinkage=0.1,
+  interaction.depth=3,
+  n.minobsinnode = 10,
+  cv.folds = 10
+))
+```
+```{r}
+#find index for number trees with minimum CV error
+best<-which.min(gbm1$cv.error)
+#get MSE and compute RMSE
+sqrt(gbm1$cv.error[best])
+#plot error curve
+#training and cross-validated MSE as n trees are added to the GBM algorithm
+gbm.perf(gbm1,method="cv")
+```
+
+###  Step 2: fix tree hyperparameter and tune learning rate:
+```{r}
+#create grid search
+hyper_grid<-expand.grid(
+  learning_rate = c(0.3,0.1,0.05,0.01,0.005),
+  RMSE=NA,
+  trees=NA,
+  time=NA
+)
+```
+
+
+```{r}
+for(i in seq_len(nrow(hyper_grid))){
+  #fit gbm
+  set.seed(7012)   #for reproducibility
+  train_time<-system.time({
+    m<-gbm(
+      formula=gross~.,
+      data=data_cluster1,
+      distribution = "gaussian",
+      n.trees=100,
+      shrinkage = hyper_grid$learning_rate[i],
+      interaction.depth = 3,
+      n.minobsinnode = 5,
+      cv.folds = 5
+    )
+  })
+  hyper_grid$RMSE[i]<-sqrt(min(m$cv.error))
+  hyper_grid$trees[i]<-which.min(m$cv.error)
+  hyper_grid$time[i]<-train_time[["elapsed"]]
+}
+```
+
+```{r}
+arrange(hyper_grid,RMSE)
+```
+
+###  Step 3: Tune tree-specific hyperpara.
+```{r}
+#search grid
+hyper_grid<-expand.grid(
+  n.trees=98,
+  shrinkage=0.01,
+  interaction.depth=c(3,5,7),
+  n.minobsinnode=c(1,3,5)
+)
+#create model fit function
+model_fit<-function(n.trees,shrinkage,interaction.depth,n.minobsinnode){
+  set.seed(7012)
+  m<-gbm(
+    formula=gross~.,
+    data=data_cluster1,
+    distribution = "gaussian",
+    n.trees=n.trees,
+    shrinkage = shrinkage,
+    interaction.depth = interaction.depth,
+    n.minobsinnode = n.minobsinnode,
+    cv.folds = 5
+  )
+  #compute RMSE
+  sqrt(min(m$cv.error))
+}
+
+```
+
+```{r}
+hyper_grid$rmse<-purrr::pmap_dbl(
+  hyper_grid,
+  ~model_fit(
+    n.trees=..1,
+    shrinkage=..2,
+    interaction.depth = ..3,
+    n.minobsinnode = ..4
+  )
+)
+```
+
+```{r}
+head(arrange(hyper_grid,rmse))
+```
+
+### step 4:feature interpretation
+```{r}
+gbm.final<-gbm(
+    formula=gross~.,
+    data=data_cluster1,
+    distribution = "gaussian",
+    n.trees=98,
+    shrinkage = 0.01,
+    interaction.depth = 3,
+    n.minobsinnode = 5
+)
+```
+```{r}
+vip::vip(gbm.final)
+```
+
+```{r}
+gbm.p.v1<-plot(gbm.final,"avg_star_rating")
+gbm.p.v2<-plot(gbm.final,"pos_rate")
+gbm.p.v3<-plot(gbm.final,"avg_com_cnt_t2")
+gbm.p.v4<-plot(gbm.final,"avg_sen_score")
+gbm.p.v5<-plot(gbm.final,"avg_like_cnt_t1")
+gbm.p.v6<-plot(gbm.final,"avg_share_cnt_t1")
+gbm.p.v7<-plot(gbm.final,"avg_share_cnt_t3")
+gbm.p.v8<-plot(gbm.final,"avg_like_cnt_t2")
+gbm.p.v9<-plot(gbm.final,"avg_share_cnt_t2")
+```
+
+```{r}
+gridExtra::grid.arrange(gbm.p.v1,gbm.p.v2,gbm.p.v3,gbm.p.v4,nrow=2)
+```
+
+```{r}
+gridExtra::grid.arrange(gbm.p.v5,gbm.p.v6,gbm.p.v7,gbm.p.v8,nrow=2)
+```
+
+
+## XGBoost
+
+### step 1:preprocessing
+```{r}
+X<-as.matrix(data_cluster1[,-13])
+Y<-data_cluster1$gross
+```
+```{r}
+dim(X)
+str(X)
+```
+### step 2:model without tuning parameter
+```{r}
+library(xgboost)
+```
+
+```{r}
+set.seed(7012)
+hp_xgb<-xgb.cv(
+  data=X, 
+  label=Y,
+  nrounds=4000,
+  objective="reg:squarederror",
+  early_stopping_rounds=50,
+  nfold=5,
+  params=list(
+    eta=0.05,
+    max_depth=3,
+    min_child_weight=3,
+    subsample=0.5,
+    colsample_bytree=0.5),
+  verbose=0
+)
+#minimum test CV RMSE
+min(hp_xgb$evaluation_log$test_rmse_mean)
+hp_xgb$best_iteration
+```
+
+### step 3:tuning parameters
+```{r}
+hyper_grid2<-expand.grid(
+  eta=0.01,
+  max_depth=3,
+  min_child_weight=3,
+  subsample=0.5,
+  colsample_bytree=0.5,
+  gamma=c(0,1,10,100),
+  lambda=c(0,1e-2,0.1,1,100),
+  alpha=c(0,1e-2,0.1,1,100),
+  rmse=NA,
+  trees=NA
+)
+```
+
+```{r}
+for(i in seq_len(nrow(hyper_grid2))){
+  set.seed(7012)
+  m2<-xgb.cv(
+    data=X,
+    label=Y,
+    nrounds=2000,
+    objective="reg:squarederror",
+    early_stopping_rounds=50,
+    nfold=5,
+    verbose=0,
+    params=list(
+      eta=hyper_grid2$eta[i],
+      max_depth=hyper_grid2$max_depth[i],
+      min_child_weight=hyper_grid2$min_child_weight[i],
+      subsample=hyper_grid2$subsample[i],
+      colsample_bytree=hyper_grid2$colsample_bytree[i],
+      gamma=hyper_grid2$gamma[i],
+      lambda=hyper_grid2$lambda[i],
+      alpha=hyper_grid2$alpha[i]
+    )
+  )
+  hyper_grid2$rmse[i]<-min(m2$evaluation_log$test_rmse_mean)
+  hyper_grid2$trees[i]<-m2$best_iteration
+}
+```
+
+
+```{r}
+head(arrange(hyper_grid2,rmse))
+```
+
+### step 4:feature interpretation
+```{r}
+set.seed(7012) 
+final_xgb <- xgboost::xgboost(
+  data = data.matrix(subset(data_cluster1, select = -gross)),
+  label = data_cluster1$gross, 
+  objective = "reg:squarederror", verbose = 0,
+  nrounds = 747, max_depth = 3, eta = 0.01, gamma = 1,lambda=1,alpha=0.01
+)
+```
+
+```{r}
+vip::vip(final_xgb)
+```
+
+```{r,warning=FALSE}
+# PDPs
+X <- subset(data_cluster1, select = -gross)  # remove response
+xgb.p1<-partial(final_xgb, pred.var = "avg_star_rating", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p2<-partial(final_xgb, pred.var = "avg_like_cnt_t3", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p3<-partial(final_xgb, pred.var = "avg_share_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p4<-partial(final_xgb, pred.var = "avg_com_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+gridExtra::grid.arrange(xgb.p1,xgb.p2,xgb.p3,xgb.p4,nrow=2)
+```
+
+```{r,warning=FALSE}
+# PDPs
+#X <- subset(data_1, select = -gross)  # remove response
+#xgb.p1<-partial(final_xgb, pred.var = "avg_star_rating", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+#xgb.p2<-partial(final_xgb, pred.var = "avg_com_cnt_t1", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+#xgb.p3<-partial(final_xgb, pred.var = "avg_like_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+#xgb.p4<-partial(final_xgb, pred.var = "avg_like_cnt_t3", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+#gridExtra::grid.arrange(xgb.p1,xgb.p2,xgb.p3,xgb.p4,nrow=2)
+```
+
+# H&A Cluster
+
+## Random Forest
+
+### Step 1: Model without tuning parameter
+```{r}
+# number of features
+n_features <- length(setdiff(names(data_cluster2),"gross"))
+
+# train a default random forest model
+df_rf1 <- ranger(gross ~.,
+  data = data_cluster2,
+  mtry = floor(n_features/3), 
+  respect.unordered.factors = "order",
+  seed = 7012)
+  
+  
+# get OOB RMSE
+(default_rmse <- sqrt(df_rf1$prediction.error))
+```
+
+
+
+### Step 2: Full Cartesian hyperparameter search
+
+Creating data frame of tuning parameters:
+```{r}
+# dataframe of combination of parameters
+# Searching across combinations of hyperparameter settings
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  mtry=floor(n_features*c(.05,.15,.25,.333,.4)),
+  min.node.size = c(1,3,5,10),
+  replace = c(TRUE, FALSE),
+  sample.fraction = c(.5,.63,.8,.9,.92),
+  rmse = NA
+)
+```
+
+```{r}
+# execute full cartesian grid search
+for (i in seq_len(nrow(hyper_grid))){
+  # fit model for ith hyperparameter combination
+  fit <- ranger(
+    formula = gross ~ .,
+    data = data_cluster2,
+    num.trees = n_features*10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 7012,
+    respect.unordered.factors = 'order',
+  )
+  # export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit$prediction.error) # CV error
+}
+
+# assess top 10 models
+# "perc_gain" represents the % improvement of RMSE w.r.t baseline model
+library(dplyr)
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse - rmse)/default_rmse*100) %>%
+  head(10)
+```
+
+### Step 3: Feature interpretation
+```{r}
+#re-run model with impurity-based variable importance
+rf_impurity<-ranger(
+  formula=gross~.,
+  data=data_cluster2,
+  num.trees=n_features*10,
+  mtry=4,
+  min.node.size=3,
+  sample.fraction = .8,
+  replace=FALSE,
+  importance="impurity",
+  respect.unordered.factors = "order",
+  verbose = FALSE,
+  seed=7012
+)
+rf.p1<-vip::vip(rf_impurity,num_features=n_features,scale=TRUE)
+rf.p1
+```
+
+```{r}
+p.v1<-partial(rf_impurity,pred.var = "avg_com_cnt_t2")%>%autoplot()
+p.v2<-partial(rf_impurity,pred.var = "pos_rate")%>%autoplot()
+p.v3<-partial(rf_impurity,pred.var = "avg_com_cnt_t3")%>%autoplot()
+p.v4<-partial(rf_impurity,pred.var = "avg_like_cnt_t2")%>%autoplot()
+#p.v5<-partial(rf_impurity,pred.var = "avg_com_cnt_t3")%>%autoplot()
+#p.v6<-partial(rf_impurity,pred.var = "avg_like_cnt_t2")%>%autoplot()
+#p.v7<-partial(rf_impurity,pred.var = "avg_like_cnt_t1")%>%autoplot()
+#p.v8<-partial(rf_impurity,pred.var = "avg_share_cnt_t1")%>%autoplot()
+#p.v9<-partial(rf_impurity,pred.var = "avg_sen_score")%>%autoplot()
+```
+```{r,warning=FALSE}
+gridExtra::grid.arrange(p.v1,p.v2,p.v3,p.v4,nrow=2)
+```
+
+## GBM
+
+###  Step 1: Run a basic implementation of GBM
+
+```{r}
+set.seed(7012)
+system.time(gbm1<-gbm(
+  formula=gross~.,
+  data=data_cluster2,
+  distribution = "gaussian",
+  n.trees=3000,
+  shrinkage=0.1,
+  interaction.depth=3,
+  n.minobsinnode = 7,
+  cv.folds = 10
+))
+```
+```{r}
+#find index for number trees with minimum CV error
+best<-which.min(gbm1$cv.error)
+#get MSE and compute RMSE
+sqrt(gbm1$cv.error[best])
+#plot error curve
+#training and cross-validated MSE as n trees are added to the GBM algorithm
+gbm.perf(gbm1,method="cv")
+```
+
+###  Step 2: fix tree hyperparameter and tune learning rate:
+```{r}
+#create grid search
+hyper_grid<-expand.grid(
+  learning_rate = c(0.3,0.1,0.05,0.01,0.005),
+  RMSE=NA,
+  trees=NA,
+  time=NA
+)
+```
+
+
+```{r}
+for(i in seq_len(nrow(hyper_grid))){
+  #fit gbm
+  set.seed(7012)   #for reproducibility
+  train_time<-system.time({
+    m<-gbm(
+      formula=gross~.,
+      data=data_cluster2,
+      distribution = "gaussian",
+      n.trees=100,
+      shrinkage = hyper_grid$learning_rate[i],
+      interaction.depth = 3,
+      n.minobsinnode = 5,
+      cv.folds = 5
+    )
+  })
+  hyper_grid$RMSE[i]<-sqrt(min(m$cv.error))
+  hyper_grid$trees[i]<-which.min(m$cv.error)
+  hyper_grid$time[i]<-train_time[["elapsed"]]
+}
+```
+
+```{r}
+arrange(hyper_grid,RMSE)
+```
+
+###  Step 3: Tune tree-specific hyperpara.
+```{r}
+#search grid
+hyper_grid<-expand.grid(
+  n.trees=56,
+  shrinkage=0.05,
+  interaction.depth=c(3,5,7),
+  n.minobsinnode=c(1,3,5)
+)
+#create model fit function
+model_fit<-function(n.trees,shrinkage,interaction.depth,n.minobsinnode){
+  set.seed(7012)
+  m<-gbm(
+    formula=gross~.,
+    data=data_cluster2,
+    distribution = "gaussian",
+    n.trees=n.trees,
+    shrinkage = shrinkage,
+    interaction.depth = interaction.depth,
+    n.minobsinnode = n.minobsinnode,
+    cv.folds = 5
+  )
+  #compute RMSE
+  sqrt(min(m$cv.error))
+}
+
+```
+
+```{r}
+hyper_grid$rmse<-purrr::pmap_dbl(
+  hyper_grid,
+  ~model_fit(
+    n.trees=..1,
+    shrinkage=..2,
+    interaction.depth = ..3,
+    n.minobsinnode = ..4
+  )
+)
+```
+
+```{r}
+head(arrange(hyper_grid,rmse))
+```
+
+### step 4:feature interpretation
+```{r}
+gbm.final<-gbm(
+    formula=gross~.,
+    data=data_cluster2,
+    distribution = "gaussian",
+    n.trees=56,
+    shrinkage = 0.05,
+    interaction.depth = 3,
+    n.minobsinnode = 5
+)
+```
+```{r}
+vip::vip(gbm.final)
+```
+
+```{r}
+gbm.p.v1<-plot(gbm.final,"avg_com_cnt_t2")
+gbm.p.v2<-plot(gbm.final,"pos_rate")
+gbm.p.v3<-plot(gbm.final,"avg_sen_score")
+gbm.p.v4<-plot(gbm.final,"avg_like_cnt_t2")
+#gbm.p.v5<-plot(gbm.final,"avg_star_rating")
+#gbm.p.v6<-plot(gbm.final,"avg_like_cnt_t1")
+#gbm.p.v7<-plot(gbm.final,"avg_share_cnt_t2")
+#gbm.p.v8<-plot(gbm.final,"avg_com_cnt_t1")
+#gbm.p.v9<-plot(gbm.final,"avg_com_cnt_t3")
+```
+
+```{r}
+gridExtra::grid.arrange(gbm.p.v1,gbm.p.v2,gbm.p.v3,gbm.p.v4,nrow=2)
+```
+
+```{r}
+#gridExtra::grid.arrange(gbm.p.v5,gbm.p.v6,gbm.p.v7,gbm.p.v8,nrow=2)
+```
+
+
+## XGBoost
+
+### step 1:preprocessing
+```{r}
+X<-as.matrix(data_cluster2[,-13])
+Y<-data_cluster2$gross
+```
+```{r}
+dim(X)
+str(X)
+```
+### step 2:model without tuning parameter
+```{r}
+library(xgboost)
+```
+
+```{r}
+set.seed(7012)
+hp_xgb<-xgb.cv(
+  data=X, 
+  label=Y,
+  nrounds=4000,
+  objective="reg:squarederror",
+  early_stopping_rounds=50,
+  nfold=5,
+  params=list(
+    eta=0.05,
+    max_depth=3,
+    min_child_weight=3,
+    subsample=0.5,
+    colsample_bytree=0.5),
+  verbose=0
+)
+#minimum test CV RMSE
+min(hp_xgb$evaluation_log$test_rmse_mean)
+hp_xgb$best_iteration
+```
+
+### step 3:tuning parameters
+```{r}
+hyper_grid2<-expand.grid(
+  eta=0.01,
+  max_depth=3,
+  min_child_weight=3,
+  subsample=0.5,
+  colsample_bytree=0.5,
+  gamma=c(0,1,10,100),
+  lambda=c(0,1e-2,0.1,1,100),
+  alpha=c(0,1e-2,0.1,1,100),
+  rmse=NA,
+  trees=NA
+)
+```
+
+```{r}
+for(i in seq_len(nrow(hyper_grid2))){
+  set.seed(7012)
+  m2<-xgb.cv(
+    data=X,
+    label=Y,
+    nrounds=2000,
+    objective="reg:squarederror",
+    early_stopping_rounds=50,
+    nfold=5,
+    verbose=0,
+    params=list(
+      eta=hyper_grid2$eta[i],
+      max_depth=hyper_grid2$max_depth[i],
+      min_child_weight=hyper_grid2$min_child_weight[i],
+      subsample=hyper_grid2$subsample[i],
+      colsample_bytree=hyper_grid2$colsample_bytree[i],
+      gamma=hyper_grid2$gamma[i],
+      lambda=hyper_grid2$lambda[i],
+      alpha=hyper_grid2$alpha[i]
+    )
+  )
+  hyper_grid2$rmse[i]<-min(m2$evaluation_log$test_rmse_mean)
+  hyper_grid2$trees[i]<-m2$best_iteration
+}
+```
+
+
+```{r}
+head(arrange(hyper_grid2,rmse))
+```
+
+### step 4:feature interpretation
+```{r}
+set.seed(7012) 
+final_xgb <- xgboost::xgboost(
+  data = data.matrix(subset(data_cluster2, select = -gross)),
+  label = data_cluster2$gross, 
+  objective = "reg:squarederror", verbose = 0,
+  nrounds = 514, max_depth = 3, eta = 0.01, gamma = 0,lambda=0.1,alpha=0.01
+)
+```
+
+```{r}
+vip::vip(final_xgb)
+```
+
+```{r,warning=FALSE}
+# PDPs
+X <- subset(data_cluster2, select = -gross)  # remove response
+xgb.p1<-partial(final_xgb, pred.var = "pos_rate", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p2<-partial(final_xgb, pred.var = "avg_com_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p3<-partial(final_xgb, pred.var = "avg_sen_score", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+xgb.p4<-partial(final_xgb, pred.var = "avg_like_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+gridExtra::grid.arrange(xgb.p1,xgb.p2,xgb.p3,xgb.p4,nrow=2)
+```
+
+```{r,warning=FALSE}
+# PDPs
+#X <- subset(data_1, select = -gross)  # remove response
+#xgb.p1<-partial(final_xgb, pred.var = "pos_rate", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+#xgb.p2<-partial(final_xgb, pred.var = "avg_sen_score", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+#xgb.p3<-partial(final_xgb, pred.var = "avg_like_cnt_t3", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+#xgb.p4<-partial(final_xgb, pred.var = "avg_share_cnt_t2", train = X, rug = TRUE,type = "regression",plot.engine = "ggplot2",plot=TRUE)
+#gridExtra::grid.arrange(xgb.p1,xgb.p2,xgb.p3,xgb.p4,nrow=2)
+```

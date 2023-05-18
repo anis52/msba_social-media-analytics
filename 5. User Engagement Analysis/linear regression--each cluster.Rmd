@@ -1,0 +1,2480 @@
+---
+title: "linear regression -- each cluster"
+author: "Xiao Jinwen(3035876771)"
+date: "3/22/2022"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+
+#setup
+```{r setup, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4)
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(glmnet, leaps, car, tidyverse, mapproj,dplyr,ggpubr)
+```
+
+
+```{r}
+library(dplyr)
+library(recipes)
+```
+
+#import data
+```{r}
+data <- read.csv("movies_with_clusters.csv")[,c(-1,-3:-54)]
+dim(data)
+str(data)
+```
+
+
+```{r}
+data$feature_clusters<-as.factor(data$feature_clusters)
+dim(data)
+str(data)
+```
+
+
+```{r}
+data_1 <- data[,c(-19)]
+dim(data_1)
+str(data_1)
+```
+
+#group the data
+```{r}
+cluster1 = data_1[which(data_1$feature_clusters== 0),c(-19)]
+cluster2 = data_1[which(data_1$feature_clusters== 1),c(-19)]
+cluster3 = data_1[which(data_1$feature_clusters== 2),c(-19)]
+```
+
+```{r}
+dim(cluster1)
+str(cluster1)
+```
+
+##cluster 1 
+
+#data preprocess
+```{r}
+blueprint <- recipe(gross ~ ., data = cluster1) %>% 
+  step_nzv(all_predictors()) %>%
+  step_log(all_numeric(), base = 10,offset=7) %>% 
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes())
+```
+
+```{r}
+prep <- prep(blueprint, training = cluster1)
+cluster1<-bake(prep,new_data=cluster1)
+```
+
+```{r}
+dim(cluster1)
+str(cluster1)
+```
+
+
+#cluster1 interation time linear regression
+```{r}
+cluster1_interation_time<-cluster1%>%
+  select(gross,avg_like_cnt_t1,avg_like_cnt_t2,avg_like_cnt_t3,avg_com_cnt_t1,avg_com_cnt_t2,avg_com_cnt_t3,avg_share_cnt_t1,avg_share_cnt_t2,avg_share_cnt_t3)
+```
+
+```{r}
+cluster_1_interation_time_linear<- lm(gross ~., data=cluster1_interation_time)
+summary(cluster_1_interation_time_linear)
+```
+
+#cluster1 interation time lasso regression
+```{r}
+Y.cluster1 <- cluster1_interation_time$gross 
+X.cluster1 <- model.matrix(gross~., data=cluster1_interation_time)[, -1]
+colnames(X.cluster1)
+```
+
+```{r}
+matrix.cluster1 <- data.frame(gross = Y.cluster1, X.cluster1)
+```
+
+```{r}
+fit.lasso.lambda <- glmnet(X.cluster1, Y.cluster1, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda)  
+fit.lasso.lambda$lambda 
+fit.lasso.lambda$a0   
+```
+
+```{r}
+fit.lasso.lambda$df    
+```
+
+```{r}
+fit.cluster_1.lasso <- glmnet(X.cluster1, Y.cluster1, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_1.lasso.cv <- cv.glmnet(X.cluster1, Y.cluster1, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv $cvm          
+fit.cluster_1.lasso.cv $lambda.min    
+fit.cluster_1.lasso.cv $nzero            
+```
+
+```{r}
+coef.min <- coef(fit.cluster_1.lasso.cv, s="lambda.min")  
+coef.min <- coef.min[which(coef.min !=0),]   
+coef.min  
+```
+
+
+```{r}
+coef.1se <- coef(fit.cluster_1.lasso.cv, s="lambda.1se")  
+coef.1se <- coef.1se[which(coef.1se !=0),] 
+coef.1se
+```
+
+```{r}
+coef.nzero <- coef(fit.cluster_1.lasso.cv, s = fit.cluster_1.lasso.cv$lambda[fit.cluster_1.lasso.cv$nzero==5])[,1]
+coef.nzero <- coef.nzero[which(coef.nzero !=0)]
+coef.nzero
+```
+
+final model LASSO
+```{r}
+coef.min <- coef(fit.cluster_1.lasso.cv, s="lambda.min")  
+coef.min <- coef.min[which(coef.min !=0),]  
+var.min <- rownames(as.matrix(coef.min)) 
+lm.input <- as.formula(paste("gross", "~", paste(var.min[-1], collapse = "+"))) 
+lm.input
+```
+
+```{r}
+fit.min.lm <- lm(lm.input, data=matrix.cluster1)
+lm.output <- coef(fit.min.lm) 
+summary(fit.min.lm) 
+```
+
+
+#cluster1 like time linear regression
+```{r}
+cluster1_like_time<-cluster1%>%
+  select(gross,avg_like_cnt_t1,avg_like_cnt_t2,avg_like_cnt_t3)
+```
+
+```{r}
+cluster1_like_time_linear<- lm(gross ~., data=cluster1_like_time)
+summary(cluster1_like_time_linear)
+```
+
+#cluster1 like time lasso regression
+```{r}
+Y.cluster1_like <- cluster1_like_time$gross 
+X.cluster1_like <- model.matrix(gross~., data=cluster1_like_time)[, -1]
+colnames(X.cluster1_like)
+```
+
+```{r}
+matrix.cluster1_like <- data.frame(gross = Y.cluster1_like, X.cluster1_like)
+```
+
+```{r}
+fit.lasso.lambda_like <- glmnet(X.cluster1_like, Y.cluster1_like, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_like)  
+fit.lasso.lambda_like$lambda 
+fit.lasso.lambda_like$a0   
+```
+
+```{r}
+fit.lasso.lambda_like$df    
+```
+
+```{r}
+fit.cluster_1.lasso_like <- glmnet(X.cluster1_like, Y.cluster1_like, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_like$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_1.lasso.cv_like <- cv.glmnet(X.cluster1_like, Y.cluster1_like, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_like $cvm          
+fit.cluster_1.lasso.cv_like $lambda.min    
+fit.cluster_1.lasso.cv_like $nzero            
+```
+
+```{r}
+coef.min_like <- coef(fit.cluster_1.lasso.cv_like, s="lambda.min")  
+coef.min_like <- coef.min_like[which(coef.min_like !=0),]   
+coef.min_like
+```
+
+
+```{r}
+coef.1se_like <- coef(fit.cluster_1.lasso.cv_like, s="lambda.1se")  
+coef.1se_like <- coef.1se_like[which(coef.1se_like !=0),] 
+coef.1se_like
+```
+
+
+final model LASSO
+```{r}
+coef.min_like <- coef(fit.cluster_1.lasso.cv_like, s="lambda.min")  
+coef.min_like <- coef.min_like[which(coef.min_like !=0),]  
+var.min_like <- rownames(as.matrix(coef.min_like)) 
+lm.input_like <- as.formula(paste("gross", "~", paste(var.min_like[-1], collapse = "+"))) 
+lm.input_like
+```
+
+```{r}
+fit.min.lm_like <- lm(lm.input_like, data=matrix.cluster1_like)
+lm.output_like <- coef(fit.min.lm_like) 
+summary(fit.min.lm_like) 
+```
+
+#cluster1 comment time linear regression
+```{r}
+cluster1_comment_time<-cluster1%>%
+  select(gross,avg_com_cnt_t1,avg_com_cnt_t2,avg_com_cnt_t3)
+```
+
+```{r}
+cluster1_comment_time_linear<- lm(gross ~., data=cluster1_comment_time)
+summary(cluster1_comment_time_linear)
+```
+
+#cluster1 comment time lasso regression
+```{r}
+Y.cluster1_comment <- cluster1_comment_time$gross 
+X.cluster1_comment <- model.matrix(gross~., data=cluster1_comment_time)[, -1]
+colnames(X.cluster1_comment)
+```
+
+```{r}
+matrix.cluster1_comment <- data.frame(gross = Y.cluster1_comment, X.cluster1_comment)
+```
+
+```{r}
+fit.lasso.lambda_comment <- glmnet(X.cluster1_comment, Y.cluster1_comment, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_comment)  
+fit.lasso.lambda_comment$lambda 
+fit.lasso.lambda_comment$a0   
+```
+
+```{r}
+fit.lasso.lambda_comment$df    
+```
+
+```{r}
+fit.cluster_1.lasso_comment <- glmnet(X.cluster1_comment, Y.cluster1_comment, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_comment$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_1.lasso.cv_comment <- cv.glmnet(X.cluster1_comment, Y.cluster1_comment, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_comment $cvm          
+fit.cluster_1.lasso.cv_comment $lambda.min    
+fit.cluster_1.lasso.cv_comment $nzero            
+```
+
+```{r}
+coef.min_comment <- coef(fit.cluster_1.lasso.cv_comment, s="lambda.min")  
+coef.min_comment <- coef.min_comment[which(coef.min_comment !=0),]   
+coef.min_comment
+```
+
+
+```{r}
+coef.1se_comment <- coef(fit.cluster_1.lasso.cv_comment, s="lambda.1se")  
+coef.1se_comment <- coef.1se_comment[which(coef.1se_comment !=0),] 
+coef.1se_comment
+```
+
+
+final model LASSO
+```{r}
+coef.min_comment <- coef(fit.cluster_1.lasso.cv_comment, s="lambda.min")  
+coef.min_comment <- coef.min_comment[which(coef.min_comment !=0),]  
+var.min_comment <- rownames(as.matrix(coef.min_comment)) 
+lm.input_comment <- as.formula(paste("gross", "~", paste(var.min_comment[-1], collapse = "+"))) 
+lm.input_comment
+```
+
+```{r}
+fit.min.lm_comment <- lm(lm.input_comment, data=matrix.cluster1_comment)
+lm.output_comment <- coef(fit.min.lm_comment) 
+summary(fit.min.lm_comment) 
+```
+
+#cluster1 share time linear regression
+```{r}
+cluster1_share_time<-cluster1%>%
+  select(gross,avg_share_cnt_t1,avg_share_cnt_t2,avg_share_cnt_t3)
+```
+
+```{r}
+cluster1_share_time_linear<- lm(gross ~., data=cluster1_share_time)
+summary(cluster1_share_time_linear)
+```
+
+#cluster1 share time lasso regression
+```{r}
+Y.cluster1_share <- cluster1_share_time$gross 
+X.cluster1_share <- model.matrix(gross~., data=cluster1_share_time)[, -1]
+colnames(X.cluster1_share)
+```
+
+```{r}
+matrix.cluster1_share <- data.frame(gross = Y.cluster1_share, X.cluster1_share)
+```
+
+```{r}
+fit.lasso.lambda_share <- glmnet(X.cluster1_share, Y.cluster1_share, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_share)  
+fit.lasso.lambda_share$lambda 
+fit.lasso.lambda_share$a0   
+```
+
+```{r}
+fit.lasso.lambda_share$df    
+```
+
+```{r}
+fit.cluster_1.lasso_share <- glmnet(X.cluster1_share, Y.cluster1_share, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_share$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_1.lasso.cv_share <- cv.glmnet(X.cluster1_share, Y.cluster1_share, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_share $cvm          
+fit.cluster_1.lasso.cv_share $lambda.min    
+fit.cluster_1.lasso.cv_share $nzero            
+```
+
+```{r}
+coef.min_share <- coef(fit.cluster_1.lasso.cv_share, s="lambda.min")  
+coef.min_share <- coef.min_share[which(coef.min_share !=0),]   
+coef.min_share
+```
+
+```{r}
+coef.1se_share <- coef(fit.cluster_1.lasso.cv_share, s="lambda.1se")  
+coef.1se_share <- coef.1se_share[which(coef.1se_share !=0),] 
+coef.1se_share
+```
+
+
+final model LASSO
+```{r}
+coef.min_share <- coef(fit.cluster_1.lasso.cv_share, s="lambda.min")  
+coef.min_share <- coef.min_share[which(coef.min_share !=0),]  
+var.min_share <- rownames(as.matrix(coef.min_share)) 
+lm.input_share <- as.formula(paste("gross", "~", paste(var.min_share[-1], collapse = "+"))) 
+lm.input_share
+```
+
+```{r}
+fit.min.lm_share <- lm(lm.input_share, data=matrix.cluster1_share)
+lm.output_share <- coef(fit.min.lm_share) 
+summary(fit.min.lm_share) 
+```
+
+#cluster1 t1 like comment share linear regression
+```{r}
+cluster1_t1<-cluster1%>%
+  select(gross,avg_like_cnt_t1,avg_com_cnt_t1,avg_share_cnt_t1)
+```
+
+```{r}
+cluster1_t1_linear<- lm(gross ~., data=cluster1_t1)
+summary(cluster1_t1_linear)
+```
+
+#cluster1 t1 like comment share lasso regression
+```{r}
+Y.cluster1_t1 <- cluster1_t1$gross 
+X.cluster1_t1 <- model.matrix(gross~., data=cluster1_t1)[, -1]
+colnames(X.cluster1_t1)
+```
+
+```{r}
+matrix.cluster1_t1 <- data.frame(gross = Y.cluster1_t1, X.cluster1_t1)
+```
+
+```{r}
+fit.lasso.lambda_t1 <- glmnet(X.cluster1_t1, Y.cluster1_t1, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_t1)  
+fit.lasso.lambda_t1$lambda 
+fit.lasso.lambda_t1$a0   
+```
+
+```{r}
+fit.lasso.lambda_t1$df    
+```
+
+```{r}
+fit.cluster_1.lasso_t1 <- glmnet(X.cluster1_t1, Y.cluster1_t1, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_t1$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_1.lasso.cv_t1 <- cv.glmnet(X.cluster1_t1, Y.cluster1_t1, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_t1 $cvm          
+fit.cluster_1.lasso.cv_t1 $lambda.min    
+fit.cluster_1.lasso.cv_t1 $nzero            
+```
+
+```{r}
+coef.min_t1 <- coef(fit.cluster_1.lasso.cv_t1, s="lambda.min")  
+coef.min_t1 <- coef.min_t1[which(coef.min_t1 !=0),]   
+coef.min_t1
+```
+
+```{r}
+coef.1se_t1 <- coef(fit.cluster_1.lasso.cv_t1, s="lambda.1se")  
+coef.1se_t1 <- coef.1se_t1[which(coef.1se_t1 !=0),] 
+coef.1se_t1
+```
+
+
+final model LASSO
+```{r}
+coef.min_t1<- coef(fit.cluster_1.lasso.cv_t1, s="lambda.min")  
+coef.min_t1 <- coef.min_t1[which(coef.min_t1 !=0),]  
+var.min_t1 <- rownames(as.matrix(coef.min_t1)) 
+lm.input_t1 <- as.formula(paste("gross", "~", paste(var.min_t1[-1], collapse = "+"))) 
+lm.input_t1
+```
+
+```{r}
+fit.min.lm_t1 <- lm(lm.input_t1, data=matrix.cluster1_t1)
+lm.output_t1 <- coef(fit.min.lm_t1) 
+summary(fit.min.lm_t1) 
+```
+
+#cluster1 t2 like comment share linear regression
+```{r}
+cluster1_t2<-cluster1%>%
+  select(gross,avg_like_cnt_t2,avg_com_cnt_t2,avg_share_cnt_t2)
+```
+
+```{r}
+cluster1_t2_linear<- lm(gross ~., data=cluster1_t2)
+summary(cluster1_t2_linear)
+```
+
+#cluster1 t2 like comment share lasso regression
+```{r}
+Y.cluster1_t2 <- cluster1_t2$gross 
+X.cluster1_t2 <- model.matrix(gross~., data=cluster1_t2)[, -1]
+colnames(X.cluster1_t2)
+```
+
+```{r}
+matrix.cluster1_t2 <- data.frame(gross = Y.cluster1_t2, X.cluster1_t2)
+```
+
+```{r}
+fit.lasso.lambda_t2 <- glmnet(X.cluster1_t2, Y.cluster1_t2, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_t2)  
+fit.lasso.lambda_t2$lambda 
+fit.lasso.lambda_t2$a0   
+```
+
+```{r}
+fit.lasso.lambda_t2$df    
+```
+
+```{r}
+fit.cluster_1.lasso_t2 <- glmnet(X.cluster1_t2, Y.cluster1_t2, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_t2$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_1.lasso.cv_t2 <- cv.glmnet(X.cluster1_t2, Y.cluster1_t2, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_t2 $cvm          
+fit.cluster_1.lasso.cv_t2 $lambda.min    
+fit.cluster_1.lasso.cv_t2 $nzero            
+```
+
+```{r}
+coef.min_t2 <- coef(fit.cluster_1.lasso.cv_t2, s="lambda.min")  
+coef.min_t2 <- coef.min_t2[which(coef.min_t2 !=0),]   
+coef.min_t2
+```
+
+```{r}
+coef.1se_t2 <- coef(fit.cluster_1.lasso.cv_t2, s="lambda.1se")  
+coef.1se_t2 <- coef.1se_t2[which(coef.1se_t2 !=0),] 
+coef.1se_t2
+```
+
+
+final model LASSO
+```{r}
+coef.min_t2<- coef(fit.cluster_1.lasso.cv_t2, s="lambda.min")  
+coef.min_t2 <- coef.min_t2[which(coef.min_t2 !=0),]  
+var.min_t2 <- rownames(as.matrix(coef.min_t2)) 
+lm.input_t2 <- as.formula(paste("gross", "~", paste(var.min_t2[-1], collapse = "+"))) 
+lm.input_t2
+```
+
+```{r}
+fit.min.lm_t2 <- lm(lm.input_t2, data=matrix.cluster1_t2)
+lm.output_t2 <- coef(fit.min.lm_t2) 
+summary(fit.min.lm_t2) 
+```
+
+#cluster1 t3 like comment share linear regression
+```{r}
+cluster1_t3<-cluster1%>%
+  select(gross,avg_like_cnt_t3,avg_com_cnt_t3,avg_share_cnt_t3)
+```
+
+```{r}
+cluster1_t3_linear<- lm(gross ~., data=cluster1_t3)
+summary(cluster1_t3_linear)
+```
+
+#cluster1 t3 like comment share lasso regression
+```{r}
+Y.cluster1_t3 <- cluster1_t3$gross 
+X.cluster1_t3 <- model.matrix(gross~., data=cluster1_t3)[, -1]
+colnames(X.cluster1_t3)
+```
+
+```{r}
+matrix.cluster1_t3 <- data.frame(gross = Y.cluster1_t3, X.cluster1_t3)
+```
+
+```{r}
+fit.lasso.lambda_t3 <- glmnet(X.cluster1_t3, Y.cluster1_t3, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_t3)  
+fit.lasso.lambda_t3$lambda 
+fit.lasso.lambda_t3$a0   
+```
+
+```{r}
+fit.lasso.lambda_t3$df    
+```
+
+```{r}
+fit.cluster_1.lasso_t3 <- glmnet(X.cluster1_t3, Y.cluster1_t3, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_t3$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_1.lasso.cv_t3 <- cv.glmnet(X.cluster1_t3, Y.cluster1_t3, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_t3 $cvm          
+fit.cluster_1.lasso.cv_t3 $lambda.min    
+fit.cluster_1.lasso.cv_t3 $nzero            
+```
+
+```{r}
+coef.min_t3 <- coef(fit.cluster_1.lasso.cv_t3, s="lambda.min")  
+coef.min_t3 <- coef.min_t3[which(coef.min_t3 !=0),]   
+coef.min_t3
+```
+
+```{r}
+coef.1se_t3 <- coef(fit.cluster_1.lasso.cv_t3, s="lambda.1se")  
+coef.1se_t3 <- coef.1se_t3[which(coef.1se_t3 !=0),] 
+coef.1se_t3
+```
+
+final model LASSO
+```{r}
+coef.min_t3<- coef(fit.cluster_1.lasso.cv_t3, s="lambda.min")  
+coef.min_t3 <- coef.min_t3[which(coef.min_t3 !=0),]  
+var.min_t3 <- rownames(as.matrix(coef.min_t3)) 
+lm.input_t3 <- as.formula(paste("gross", "~", paste(var.min_t3[-1], collapse = "+"))) 
+lm.input_t3
+```
+
+```{r}
+fit.min.lm_t3 <- lm(lm.input_t3, data=matrix.cluster1_t3)
+lm.output_t3 <- coef(fit.min.lm_t3) 
+summary(fit.min.lm_t3) 
+```
+
+
+#cluster1 interation all linear regression
+```{r}
+cluster1_interation_all<-cluster1%>%
+  select(gross,avg_like_cnt,avg_com_cnt,avg_share_cnt)
+```
+
+```{r}
+cluster_1_interation_all_linear<- lm(gross ~., data=cluster1_interation_all)
+summary(cluster_1_interation_all_linear)
+```
+
+
+
+#cluster1 interation all lasso regression
+```{r}
+Y.cluster1_all <- cluster1_interation_all$gross 
+X.cluster1_all <- model.matrix(gross~., data=cluster1_interation_all)[, -1]
+colnames(X.cluster1_all)
+```
+
+```{r}
+matrix.cluster1_all <- data.frame(gross = Y.cluster1_all, X.cluster1_all)
+```
+
+```{r}
+fit.lasso.lambda_all <- glmnet(X.cluster1_all, Y.cluster1_all, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_all)  
+fit.lasso.lambda_all$lambda 
+fit.lasso.lambda_all$a0  
+```
+
+```{r}
+fit.lasso.lambda_all$df 
+```
+
+```{r}
+fit.cluster_1.lasso_all <- glmnet(X.cluster1_all, Y.cluster1_all, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_all$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_1.lasso.cv_all <- cv.glmnet(X.cluster1_all, Y.cluster1_all, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_all$cvm              
+fit.cluster_1.lasso.cv_all$lambda.min       
+fit.cluster_1.lasso.cv_all $nzero            
+```
+
+```{r}
+coef.min_all <- coef(fit.cluster_1.lasso.cv_all, s="lambda.min")  
+coef.min_all <- coef.min_all[which(coef.min_all !=0),]   
+coef.min_all 
+```
+
+
+```{r}
+coef.1se_all <- coef(fit.cluster_1.lasso.cv_all, s="lambda.1se")  
+coef.1se_all<- coef.1se_all[which(coef.1se_all !=0),] 
+coef.1se_all
+```
+
+final model LASSO
+```{r}
+coef.min_all <- coef(fit.cluster_1.lasso.cv_all, s="lambda.min") 
+coef.min_all <- coef.min_all[which(coef.min_all !=0),]  
+var.min_all <- rownames(as.matrix(coef.min_all))
+lm.input_all <- as.formula(paste("gross", "~", paste(var.min_all[-1], collapse = "+"))) 
+lm.input_all
+```
+
+```{r}
+fit.min.lm_all <- lm(lm.input_all, data=matrix.cluster1_all)
+lm.output_all <- coef(fit.min.lm_all) 
+summary(fit.min.lm_all) 
+```
+
+#cluster1 Favorable rating linear regression
+```{r}
+cluster1_favorable_rating<-cluster1%>%
+  select(gross,avg_sen_score,avg_sen_score_2,avg_sen_score_3,pos_rate,neg_rate)
+```
+
+```{r}
+cluster1_favorable_rating_linear<- lm(gross ~., data=cluster1_favorable_rating)
+summary(cluster1_favorable_rating_linear)
+```
+
+#cluster1 Favorable rating lasso regression
+```{r}
+Y.cluster1_fav <- cluster1_favorable_rating$gross 
+X.cluster1_fav <- model.matrix(gross~., data=cluster1_favorable_rating)[, -1]
+colnames(X.cluster1_fav)
+```
+
+
+```{r}
+matrix.cluster1_fav <- data.frame(gross = Y.cluster1_fav, X.cluster1_fav)
+```
+
+```{r}
+fit.lasso.lambda_fav <- glmnet(X.cluster1_fav, Y.cluster1_fav, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_fav)  
+fit.lasso.lambda_fav$lambda 
+fit.lasso.lambda_fav$a0    
+```
+
+
+
+```{r}
+set.seed(10)
+fit.cluster_1.lasso.cv_fav <- cv.glmnet(X.cluster1_fav, Y.cluster1_fav, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_fav$cvm              
+fit.cluster_1.lasso.cv_fav$lambda.min       
+fit.cluster_1.lasso.cv_fav $nzero           
+```
+
+```{r}
+coef.min_fav <- coef(fit.cluster_1.lasso.cv_fav, s="lambda.min")  
+coef.min_fav <- coef.min_fav[which(coef.min_fav !=0),]   
+coef.min_fav 
+```
+
+
+```{r}
+coef.1se_fav <- coef(fit.cluster_1.lasso.cv_fav, s="lambda.1se")  
+coef.1se_fav<- coef.1se_fav[which(coef.1se_fav !=0),] 
+coef.1se_fav
+```
+
+final model LASSO
+```{r}
+coef.min_fav <- coef(fit.cluster_1.lasso.cv_fav, s="lambda.min")  
+coef.min_fav <- coef.min_fav[which(coef.min_fav !=0),]  
+var.min_fav <- rownames(as.matrix(coef.min_fav)) 
+lm.input_fav <- as.formula(paste("gross", "~", paste(var.min_fav[-1], collapse = "+"))) 
+lm.input_fav
+```
+
+```{r}
+fit.min.lm_fav <- lm(lm.input_fav, data=matrix.cluster1_fav)
+lm.output_fav <- coef(fit.min.lm_fav)
+summary(fit.min.lm_fav) 
+```
+
+#cluster1 Fav rating linear regression
+```{r}
+cluster1_fav_rating<-cluster1%>%
+  select(gross,avg_sen_score,avg_sen_score_2,avg_sen_score_3,pos_rate)
+```
+
+```{r}
+cluster1_fav_rating_linear<- lm(gross ~., data=cluster1_fav_rating)
+summary(cluster1_fav_rating_linear)
+```
+
+#cluster1 Favorable rating lasso regression
+```{r}
+Y.cluster1_favo <- cluster1_fav_rating$gross 
+X.cluster1_favo <- model.matrix(gross~., data=cluster1_fav_rating)[, -1]
+colnames(X.cluster1_favo)
+```
+
+
+```{r}
+matrix.cluster1_favo <- data.frame(gross = Y.cluster1_favo, X.cluster1_favo)
+```
+
+```{r}
+fit.lasso.lambda_favo <- glmnet(X.cluster1_favo, Y.cluster1_favo, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_favo)  
+fit.lasso.lambda_favo$lambda 
+fit.lasso.lambda_favo$a0    
+```
+
+```{r}
+set.seed(10)
+fit.cluster_1.lasso.cv_favo <- cv.glmnet(X.cluster1_favo, Y.cluster1_favo, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_1.lasso.cv_favo$cvm              
+fit.cluster_1.lasso.cv_favo$lambda.min       
+fit.cluster_1.lasso.cv_favo $nzero           
+```
+
+```{r}
+coef.min_favo <- coef(fit.cluster_1.lasso.cv_favo, s="lambda.min")  
+coef.min_favo <- coef.min_favo[which(coef.min_favo !=0),]   
+coef.min_favo 
+```
+
+```{r}
+coef.1se_favo <- coef(fit.cluster_1.lasso.cv_favo, s="lambda.1se")  
+coef.1se_favo<- coef.1se_favo[which(coef.1se_favo !=0),] 
+coef.1se_favo
+```
+
+final model LASSO
+```{r}
+coef.min_favo <- coef(fit.cluster_1.lasso.cv_favo, s="lambda.min")  
+coef.min_favo <- coef.min_favo[which(coef.min_favo !=0),]  
+var.min_favo <- rownames(as.matrix(coef.min_favo)) 
+lm.input_favo <- as.formula(paste("gross", "~", paste(var.min_favo[-1], collapse = "+"))) 
+lm.input_favo
+```
+
+```{r}
+fit.min.lm_favo <- lm(lm.input_favo, data=matrix.cluster1_favo)
+lm.output_favo <- coef(fit.min.lm_favo)
+summary(fit.min.lm_favo) 
+```
+
+##Cluster 2
+#data preprocess
+```{r}
+blueprint <- recipe(gross ~ ., data = cluster2) %>% 
+  step_nzv(all_predictors()) %>%
+  step_log(all_numeric(), base = 10,offset=7) %>% 
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes())
+```
+
+```{r}
+prep <- prep(blueprint, training = cluster2)
+cluster2<-bake(prep,new_data=cluster2)
+```
+
+```{r}
+dim(cluster2)
+str(cluster2)
+```
+
+
+#cluster2 interation time linear regression
+```{r}
+cluster2_interation_time<-cluster2%>%
+  select(gross,avg_like_cnt_t1,avg_like_cnt_t2,avg_like_cnt_t3,avg_com_cnt_t1,avg_com_cnt_t2,avg_com_cnt_t3,avg_share_cnt_t1,avg_share_cnt_t2,avg_share_cnt_t3)
+```
+
+```{r}
+cluster_2_interation_time_linear<- lm(gross ~., data=cluster2_interation_time)
+summary(cluster_2_interation_time_linear)
+```
+
+#cluster2 interation time lasso regression
+```{r}
+Y.cluster2 <- cluster2_interation_time$gross 
+X.cluster2 <- model.matrix(gross~., data=cluster2_interation_time)[, -1]
+colnames(X.cluster2)
+```
+
+```{r}
+matrix.cluster2 <- data.frame(gross = Y.cluster2, X.cluster2)
+```
+
+```{r}
+fit.lasso.lambda_c2 <- glmnet(X.cluster2, Y.cluster2, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_c2)  
+fit.lasso.lambda_c2$lambda 
+fit.lasso.lambda_c2$a0   
+```
+
+```{r}
+fit.lasso.lambda_c2$df   
+```
+
+```{r}
+fit.cluster_2.lasso_c2 <- glmnet(X.cluster2, Y.cluster2, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_2.lasso_c2$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_c2 <- cv.glmnet(X.cluster2, Y.cluster2, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_c2 $cvm              
+fit.cluster_2.lasso.cv_c2 $lambda.min       
+fit.cluster_2.lasso.cv_c2$nzero            
+```
+
+```{r}
+coef.min_c2 <- coef(fit.cluster_2.lasso.cv_c2, s="lambda.min")  
+coef.min_c2 <- coef.min_c2[which(coef.min_c2 !=0),]   
+coef.min_c2  
+```
+
+
+```{r}
+coef.1se_c2 <- coef(fit.cluster_2.lasso.cv_c2, s="lambda.1se")  
+coef.1se_c2 <- coef.1se_c2[which(coef.1se_c2 !=0),] 
+coef.1se_c2
+```
+
+```{r}
+coef.nzero_c2 <- coef(fit.cluster_2.lasso.cv_c2, s = fit.cluster_2.lasso.cv_c2$lambda[fit.cluster_2.lasso.cv_c2$nzero==5])[,1]
+coef.nzero_c2 <- coef.nzero_c2[which(coef.nzero_c2 !=0)]
+coef.nzero_c2
+```
+
+final model LASSO
+```{r}
+coef.min_c2 <- coef(fit.cluster_2.lasso.cv_c2, s="lambda.min")  
+coef.min_c2 <- coef.min_c2[which(coef.min_c2 !=0),]  
+var.min_c2 <- rownames(as.matrix(coef.min_c2))
+lm.input_c2 <- as.formula(paste("gross", "~", paste(var.min_c2[-1], collapse = "+"))) 
+lm.input_c2
+```
+
+```{r}
+fit.min.lm_c2 <- lm(lm.input_c2, data=matrix.cluster2)
+lm.output_c2 <- coef(fit.min.lm_c2)
+summary(fit.min.lm_c2) 
+```
+
+
+#cluster2 like time linear regression
+```{r}
+cluster2_like_time<-cluster2%>%
+  select(gross,avg_like_cnt_t1,avg_like_cnt_t2,avg_like_cnt_t3)
+```
+
+```{r}
+cluster2_like_time_linear<- lm(gross ~., data=cluster2_like_time)
+summary(cluster2_like_time_linear)
+```
+
+#cluster2 like time lasso regression
+```{r}
+Y.cluster2_like <- cluster2_like_time$gross 
+X.cluster2_like <- model.matrix(gross~., data=cluster2_like_time)[, -1]
+colnames(X.cluster2_like)
+```
+
+```{r}
+matrix.cluster2_like <- data.frame(gross = Y.cluster2_like, X.cluster2_like)
+```
+
+```{r}
+fit.lasso.lambda_like_c2 <- glmnet(X.cluster2_like, Y.cluster2_like, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_like_c2)  
+fit.lasso.lambda_like_c2$lambda 
+fit.lasso.lambda_like_c2$a0   
+```
+
+```{r}
+fit.lasso.lambda_like_c2$df    
+```
+
+```{r}
+fit.cluster_1.lasso_like_c2 <- glmnet(X.cluster2_like, Y.cluster2_like, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_like_c2$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_like <- cv.glmnet(X.cluster2_like, Y.cluster2_like, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_like $cvm          
+fit.cluster_2.lasso.cv_like $lambda.min    
+fit.cluster_2.lasso.cv_like $nzero            
+```
+
+```{r}
+coef.min_like_c2 <- coef(fit.cluster_2.lasso.cv_like, s="lambda.min")  
+coef.min_like_c2 <- coef.min_like_c2[which(coef.min_like_c2 !=0),]   
+coef.min_like_c2
+```
+
+
+```{r}
+coef.1se_like_c2 <- coef(fit.cluster_2.lasso.cv_like, s="lambda.1se")  
+coef.1se_like_c2 <- coef.1se_like_c2[which(coef.1se_like_c2 !=0),] 
+coef.1se_like_c2
+```
+
+
+final model LASSO
+```{r}
+coef.min_like_c2 <- coef(fit.cluster_2.lasso.cv_like, s="lambda.min")  
+coef.min_like_c2 <- coef.min_like_c2[which(coef.min_like_c2 !=0),]  
+var.min_like_c2 <- rownames(as.matrix(coef.min_like_c2)) 
+lm.input_like_c2 <- as.formula(paste("gross", "~", paste(var.min_like_c2[-1], collapse = "+"))) 
+lm.input_like_c2
+```
+
+```{r}
+fit.min.lm_like_c2 <- lm(lm.input_like_c2, data=matrix.cluster2_like)
+lm.output_like_c2 <- coef(fit.min.lm_like_c2) 
+summary(fit.min.lm_like_c2) 
+```
+
+#cluster2 comment time linear regression
+```{r}
+cluster2_comment_time<-cluster2%>%
+  select(gross,avg_com_cnt_t1,avg_com_cnt_t2,avg_com_cnt_t3)
+```
+
+```{r}
+cluster2_comment_time_linear<- lm(gross ~., data=cluster2_comment_time)
+summary(cluster2_comment_time_linear)
+```
+
+#cluster2 comment time lasso regression
+```{r}
+Y.cluster2_comment <- cluster2_comment_time$gross 
+X.cluster2_comment <- model.matrix(gross~., data=cluster2_comment_time)[, -1]
+colnames(X.cluster2_comment)
+```
+
+```{r}
+matrix.cluster2_comment <- data.frame(gross = Y.cluster2_comment, X.cluster2_comment)
+```
+
+```{r}
+fit.lasso.lambda_comment_c2 <- glmnet(X.cluster2_comment, Y.cluster2_comment, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_comment_c2)  
+fit.lasso.lambda_comment_c2$lambda 
+fit.lasso.lambda_comment_c2$a0   
+```
+
+```{r}
+fit.lasso.lambda_comment_c2$df    
+```
+
+```{r}
+fit.cluster_2.lasso_comment <- glmnet(X.cluster2_comment, Y.cluster2_comment, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_2.lasso_comment$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_comment <- cv.glmnet(X.cluster2_comment, Y.cluster2_comment, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_comment $cvm          
+fit.cluster_2.lasso.cv_comment $lambda.min    
+fit.cluster_2.lasso.cv_comment $nzero            
+```
+
+```{r}
+coef.min_comment_c2 <- coef(fit.cluster_2.lasso.cv_comment, s="lambda.min")  
+coef.min_comment_c2 <- coef.min_comment_c2[which(coef.min_comment_c2 !=0),]   
+coef.min_comment_c2
+```
+
+
+```{r}
+coef.1se_comment_c2 <- coef(fit.cluster_2.lasso.cv_comment, s="lambda.1se")  
+coef.1se_comment_c2 <- coef.1se_comment_c2[which(coef.1se_comment_c2 !=0),] 
+coef.1se_comment_c2
+```
+
+
+final model LASSO
+```{r}
+coef.min_comment_c2 <- coef(fit.cluster_2.lasso.cv_comment, s="lambda.min")  
+coef.min_comment_c2 <- coef.min_comment_c2[which(coef.min_comment_c2 !=0),]  
+var.min_comment_c2 <- rownames(as.matrix(coef.min_comment_c2)) 
+lm.input_comment_c2<- as.formula(paste("gross", "~", paste(var.min_comment_c2[-1], collapse = "+"))) 
+lm.input_comment_c2
+```
+
+
+```{r}
+fit.min.lm_comment_c2 <- lm(lm.input_comment_c2, data=matrix.cluster2_comment)
+lm.output_comment_c2 <- coef(fit.min.lm_comment_c2) 
+summary(fit.min.lm_comment_c2) 
+```
+
+
+#cluster2 share time linear regression
+```{r}
+cluster2_share_time<-cluster2%>%
+  select(gross,avg_share_cnt_t1,avg_share_cnt_t2,avg_share_cnt_t3)
+```
+
+```{r}
+cluster2_share_time_linear<- lm(gross ~., data=cluster2_share_time)
+summary(cluster2_share_time_linear)
+```
+
+#cluster2 share time lasso regression
+```{r}
+Y.cluster2_share <- cluster2_share_time$gross 
+X.cluster2_share <- model.matrix(gross~., data=cluster2_share_time)[, -1]
+colnames(X.cluster2_share)
+```
+
+```{r}
+matrix.cluster2_share <- data.frame(gross = Y.cluster2_share, X.cluster2_share)
+```
+
+```{r}
+fit.lasso.lambda_2_share <- glmnet(X.cluster2_share, Y.cluster2_share, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_2_share)  
+fit.lasso.lambda_2_share$lambda 
+fit.lasso.lambda_2_share$a0   
+```
+
+```{r}
+fit.lasso.lambda_2_share$df    
+```
+
+```{r}
+fit.cluster_2.lasso_share <- glmnet(X.cluster2_share, Y.cluster2_share, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_2.lasso_share$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_share <- cv.glmnet(X.cluster2_share, Y.cluster2_share, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_share $cvm          
+fit.cluster_2.lasso.cv_share $lambda.min    
+fit.cluster_2.lasso.cv_share $nzero            
+```
+
+```{r}
+coef.min_2_share <- coef(fit.cluster_2.lasso.cv_share, s="lambda.min")  
+coef.min_2_share <- coef.min_2_share[which(coef.min_2_share !=0),]   
+coef.min_2_share
+```
+
+
+```{r}
+coef.1se_2_share <- coef(fit.cluster_2.lasso.cv_share, s="lambda.1se")  
+coef.1se_2_share <- coef.1se_2_share[which(coef.1se_2_share !=0),] 
+coef.1se_2_share
+```
+
+
+final model LASSO
+```{r}
+coef.min_2_share <- coef(fit.cluster_2.lasso.cv_share, s="lambda.min")  
+coef.min_2_share <- coef.min_2_share[which(coef.min_2_share !=0),]  
+var.min_2_share <- rownames(as.matrix(coef.min_2_share)) 
+lm.input_2_share <- as.formula(paste("gross", "~", paste(var.min_2_share[-1], collapse = "+"))) 
+lm.input_2_share
+```
+
+
+```{r}
+fit.min.lm_2_share <- lm(lm.input_2_share, data=matrix.cluster2_share)
+lm.output_2_share <- coef(fit.min.lm_2_share) 
+summary(fit.min.lm_2_share) 
+```
+
+#cluster2 t1 like comment share linear regression
+```{r}
+cluster2_t1_time<-cluster2%>%
+  select(gross,avg_like_cnt_t1,avg_com_cnt_t1,avg_share_cnt_t1)
+```
+
+```{r}
+cluster_2_t1_time_linear<- lm(gross ~., data=cluster2_t1_time)
+summary(cluster_2_t1_time_linear)
+```
+
+#cluster2 t1 like comment share lasso regression
+```{r}
+Y.cluster2_t1 <- cluster2_t1_time$gross 
+X.cluster2_t1 <- model.matrix(gross~., data=cluster2_t1_time)[, -1]
+colnames(X.cluster2_t1)
+```
+
+```{r}
+matrix.cluster2_t1 <- data.frame(gross = Y.cluster2_t1, X.cluster2_t1)
+```
+
+```{r}
+fit.lasso.lambda_c2_t1 <- glmnet(X.cluster2_t1, Y.cluster2_t1, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_c2_t1)  
+fit.lasso.lambda_c2_t1$lambda 
+fit.lasso.lambda_c2_t1$a0   
+```
+
+```{r}
+fit.lasso.lambda_c2_t1$df   
+```
+
+```{r}
+fit.cluster_2.lasso_c2_t1 <- glmnet(X.cluster2_t1, Y.cluster2_t1, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_2.lasso_c2_t1$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_c2_t1 <- cv.glmnet(X.cluster2_t1, Y.cluster2_t1, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_c2_t1 $cvm              
+fit.cluster_2.lasso.cv_c2_t1 $lambda.min       
+fit.cluster_2.lasso.cv_c2_t1$nzero            
+```
+
+```{r}
+coef.min_c2_t1 <- coef(fit.cluster_2.lasso.cv_c2_t1, s="lambda.min")  
+coef.min_c2_t1 <- coef.min_c2_t1[which(coef.min_c2_t1 !=0),]   
+coef.min_c2_t1  
+```
+
+
+```{r}
+coef.1se_c2_t1 <- coef(fit.cluster_2.lasso.cv_c2_t1, s="lambda.1se")  
+coef.1se_c2_t1 <- coef.1se_c2_t1[which(coef.1se_c2_t1 !=0),] 
+coef.1se_c2_t1
+```
+
+final model LASSO
+```{r}
+coef.min_c2_t1 <- coef(fit.cluster_2.lasso.cv_c2_t1, s="lambda.min")  
+coef.min_c2_t1 <- coef.min_c2_t1[which(coef.min_c2_t1 !=0),]  
+var.min_c2_t1 <- rownames(as.matrix(coef.min_c2_t1))
+lm.input_c2_t1 <- as.formula(paste("gross", "~", paste(var.min_c2_t1[-1], collapse = "+"))) 
+lm.input_c2_t1
+```
+
+```{r}
+fit.min.lm_c2_t1 <- lm(lm.input_c2_t1, data=matrix.cluster2_t1)
+lm.output_c2_t1 <- coef(fit.min.lm_c2_t1)
+summary(fit.min.lm_c2_t1) 
+```
+
+#cluster2 t2 like comment share linear regression
+```{r}
+cluster2_t2_time<-cluster2%>%
+  select(gross,avg_like_cnt_t2,avg_com_cnt_t2,avg_share_cnt_t2)
+```
+
+```{r}
+cluster_2_t2_time_linear<- lm(gross ~., data=cluster2_t2_time)
+summary(cluster_2_t2_time_linear)
+```
+
+#cluster2 t2 like comment share lasso regression
+```{r}
+Y.cluster2_t2 <- cluster2_t2_time$gross 
+X.cluster2_t2 <- model.matrix(gross~., data=cluster2_t2_time)[, -1]
+colnames(X.cluster2_t2)
+```
+
+```{r}
+matrix.cluster2_t2 <- data.frame(gross = Y.cluster2_t2, X.cluster2_t2)
+```
+
+```{r}
+fit.lasso.lambda_c2_t2 <- glmnet(X.cluster2_t2, Y.cluster2_t2, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_c2_t2)  
+fit.lasso.lambda_c2_t2$lambda 
+fit.lasso.lambda_c2_t2$a0   
+```
+
+```{r}
+fit.lasso.lambda_c2_t2$df   
+```
+
+```{r}
+fit.cluster_2.lasso_c2_t2 <- glmnet(X.cluster2_t2, Y.cluster2_t2, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_2.lasso_c2_t2$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_c2_t2 <- cv.glmnet(X.cluster2_t2, Y.cluster2_t2, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_c2_t2 $cvm              
+fit.cluster_2.lasso.cv_c2_t2 $lambda.min       
+fit.cluster_2.lasso.cv_c2_t2$nzero            
+```
+
+```{r}
+coef.min_c2_t2 <- coef(fit.cluster_2.lasso.cv_c2_t2, s="lambda.min")  
+coef.min_c2_t2 <- coef.min_c2_t2[which(coef.min_c2_t2 !=0),]   
+coef.min_c2_t2  
+```
+
+
+```{r}
+coef.1se_c2_t2 <- coef(fit.cluster_2.lasso.cv_c2_t2, s="lambda.1se")  
+coef.1se_c2_t2 <- coef.1se_c2_t2[which(coef.1se_c2_t2 !=0),] 
+coef.1se_c2_t2
+```
+
+final model LASSO
+```{r}
+coef.min_c2_t2 <- coef(fit.cluster_2.lasso.cv_c2_t2, s="lambda.min")  
+coef.min_c2_t2 <- coef.min_c2_t2[which(coef.min_c2_t2 !=0),]  
+var.min_c2_t2 <- rownames(as.matrix(coef.min_c2_t2))
+lm.input_c2_t2 <- as.formula(paste("gross", "~", paste(var.min_c2_t2[-1], collapse = "+"))) 
+lm.input_c2_t2
+```
+
+```{r}
+fit.min.lm_c2_t2 <- lm(lm.input_c2_t2, data=matrix.cluster2_t2)
+lm.output_c2_t2 <- coef(fit.min.lm_c2_t2)
+summary(fit.min.lm_c2_t2) 
+```
+
+#cluster2 t3 like comment share linear regression
+```{r}
+cluster2_t3_time<-cluster2%>%
+  select(gross,avg_like_cnt_t3,avg_com_cnt_t3,avg_share_cnt_t3)
+```
+
+```{r}
+cluster_2_t3_time_linear<- lm(gross ~., data=cluster2_t3_time)
+summary(cluster_2_t3_time_linear)
+```
+
+#cluster2 t3 like comment share lasso regression
+```{r}
+Y.cluster2_t3 <- cluster2_t3_time$gross 
+X.cluster2_t3 <- model.matrix(gross~., data=cluster2_t3_time)[, -1]
+colnames(X.cluster2_t3)
+```
+
+```{r}
+matrix.cluster2_t3 <- data.frame(gross = Y.cluster2_t3, X.cluster2_t3)
+```
+
+```{r}
+fit.lasso.lambda_c2_t3 <- glmnet(X.cluster2_t3, Y.cluster2_t3, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_c2_t3)  
+fit.lasso.lambda_c2_t3$lambda 
+fit.lasso.lambda_c2_t3$a0   
+```
+
+```{r}
+fit.lasso.lambda_c2_t3$df   
+```
+
+```{r}
+fit.cluster_2.lasso_c2_t3 <- glmnet(X.cluster2_t3, Y.cluster2_t3, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_2.lasso_c2_t3$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_c2_t3 <- cv.glmnet(X.cluster2_t3, Y.cluster2_t3, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_c2_t3 $cvm              
+fit.cluster_2.lasso.cv_c2_t3 $lambda.min       
+fit.cluster_2.lasso.cv_c2_t3$nzero            
+```
+
+```{r}
+coef.min_c2_t3 <- coef(fit.cluster_2.lasso.cv_c2_t3, s="lambda.min")  
+coef.min_c2_t3 <- coef.min_c2_t3[which(coef.min_c2_t3 !=0),]   
+coef.min_c2_t3  
+```
+
+
+```{r}
+coef.1se_c2_t3 <- coef(fit.cluster_2.lasso.cv_c2_t3, s="lambda.1se")  
+coef.1se_c2_t3 <- coef.1se_c2_t3[which(coef.1se_c2_t3 !=0),] 
+coef.1se_c2_t3
+```
+
+final model LASSO
+```{r}
+coef.min_c2_t3 <- coef(fit.cluster_2.lasso.cv_c2_t3, s="lambda.min")  
+coef.min_c2_t3 <- coef.min_c2_t3[which(coef.min_c2_t3 !=0),]  
+var.min_c2_t3 <- rownames(as.matrix(coef.min_c2_t3))
+lm.input_c2_t3 <- as.formula(paste("gross", "~", paste(var.min_c2_t3[-1], collapse = "+"))) 
+lm.input_c2_t3
+```
+
+```{r}
+fit.min.lm_c2_t3 <- lm(lm.input_c2_t3, data=matrix.cluster2_t3)
+lm.output_c2_t3 <- coef(fit.min.lm_c2_t3)
+summary(fit.min.lm_c2_t3) 
+```
+
+#cluster2 interation all linear regression
+```{r}
+cluster2_interation_all<-cluster2%>%
+  select(gross,avg_like_cnt,avg_com_cnt,avg_share_cnt)
+```
+
+```{r}
+cluster_2_interation_all_linear<- lm(gross ~., data=cluster2_interation_all)
+summary(cluster_2_interation_all_linear)
+```
+
+#cluster2 interation all lasso regression
+```{r}
+Y.cluster2_all <- cluster2_interation_all$gross 
+X.cluster2_all <- model.matrix(gross~., data=cluster2_interation_all)[, -1]
+colnames(X.cluster2_all)
+```
+
+```{r}
+matrix.cluster2_all <- data.frame(gross = Y.cluster2_all, X.cluster2_all)
+```
+
+```{r}
+fit.lasso.lambda_all_c2 <- glmnet(X.cluster2_all, Y.cluster2_all, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_all_c2)  
+fit.lasso.lambda_all_c2$lambda 
+fit.lasso.lambda_all_c2$a0    
+```
+
+```{r}
+fit.lasso.lambda_all_c2$df 
+```
+
+```{r}
+fit.cluster_2.lasso_all_c2 <- glmnet(X.cluster2_all, Y.cluster2_all, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_2.lasso_all_c2$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_all_c2 <- cv.glmnet(X.cluster2_all, Y.cluster2_all, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_all_c2$cvm              
+fit.cluster_2.lasso.cv_all_c2$lambda.min         
+fit.cluster_2.lasso.cv_all_c2 $nzero            
+```
+
+```{r}
+coef.min_all_c2 <- coef(fit.cluster_2.lasso.cv_all_c2, s="lambda.min")  
+coef.min_all_c2 <- coef.min_all_c2[which(coef.min_all_c2 !=0),]   
+```
+
+
+```{r}
+coef.1se_all_c2 <- coef(fit.cluster_2.lasso.cv_all_c2, s="lambda.1se")  
+coef.1se_all_c2<- coef.1se_all_c2[which(coef.1se_all_c2 !=0),] 
+coef.1se_all_c2
+```
+
+final model LASSO
+```{r}
+coef.min_all_c2 <- coef(fit.cluster_2.lasso.cv_all_c2, s="lambda.min")  
+coef.min_all_c2 <- coef.min_all_c2[which(coef.min_all_c2 !=0),]  
+var.min_all_c2 <- rownames(as.matrix(coef.min_all_c2))
+lm.input_all_c2 <- as.formula(paste("gross", "~", paste(var.min_all_c2[-1], collapse = "+"))) 
+lm.input_all_c2
+```
+
+```{r}
+fit.min.lm_all_c2 <- lm(lm.input_all_c2, data=matrix.cluster2_all)
+lm.output_all_c2 <- coef(fit.min.lm_all_c2) 
+summary(fit.min.lm_all_c2) 
+```
+
+#cluster2 Favorable rating linear regression
+```{r}
+cluster2_favorable_rating<-cluster2%>%
+  select(gross,avg_sen_score,avg_sen_score_2,avg_sen_score_3,pos_rate,neg_rate)
+```
+
+```{r}
+cluster2_favorable_rating_linear<- lm(gross ~., data=cluster2_favorable_rating)
+summary(cluster2_favorable_rating_linear)
+```
+
+#cluster2 Favorable rating lasso regression
+```{r}
+Y.cluster2_fav <- cluster2_favorable_rating$gross 
+X.cluster2_fav <- model.matrix(gross~., data=cluster2_favorable_rating)[, -1]
+colnames(X.cluster2_fav)
+```
+
+
+```{r}
+matrix.cluster2_fav <- data.frame(gross = Y.cluster2_fav, X.cluster2_fav)
+```
+
+```{r}
+fit.lasso.lambda_fav_c2 <- glmnet(X.cluster2_fav, Y.cluster2_fav, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_fav_c2)  
+fit.lasso.lambda_fav_c2$lambda 
+fit.lasso.lambda_fav_c2$a0    
+```
+
+
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_fav_c2 <- cv.glmnet(X.cluster2_fav, Y.cluster2_fav, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_fav_c2$cvm             
+fit.cluster_2.lasso.cv_fav_c2$lambda.min        
+fit.cluster_2.lasso.cv_fav_c2 $nzero           
+```
+
+```{r}
+coef.min_fav_c2 <- coef(fit.cluster_2.lasso.cv_fav_c2, s="lambda.min")  
+coef.min_fav_c2 <- coef.min_fav_c2[which(coef.min_fav_c2 !=0),]   
+coef.min_fav_c2  
+```
+
+
+```{r}
+coef.1se_fav_c2 <- coef(fit.cluster_2.lasso.cv_fav_c2, s="lambda.1se")  
+coef.1se_fav_c2<- coef.1se_fav_c2[which(coef.1se_fav_c2 !=0),] 
+coef.1se_fav_c2
+```
+
+final model LASSO
+```{r}
+coef.min_fav_c2 <- coef(fit.cluster_2.lasso.cv_fav_c2, s="lambda.min")  
+coef.min_fav_c2 <- coef.min_fav_c2[which(coef.min_fav_c2 !=0),]  
+var.min_fav_c2 <- rownames(as.matrix(coef.min_fav_c2))
+lm.input_fav_c2 <- as.formula(paste("gross", "~", paste(var.min_fav_c2[-1], collapse = "+")))
+lm.input_fav_c2
+```
+
+```{r}
+fit.min.lm_fav_c2 <- lm(lm.input_fav_c2, data=matrix.cluster2_fav)
+lm.output_fav_c2 <- coef(fit.min.lm_fav_c2)
+summary(fit.min.lm_fav_c2) 
+```
+
+#cluster2 Fav rating linear regression
+```{r}
+cluster2_favo_rating<-cluster2%>%
+  select(gross,avg_sen_score,avg_sen_score_2,avg_sen_score_3,pos_rate)
+```
+
+```{r}
+cluster2_favo_rating_linear<- lm(gross ~., data=cluster2_favo_rating)
+summary(cluster2_favo_rating_linear)
+```
+
+#cluster2 Fav rating lasso regression
+```{r}
+Y.cluster2_favo <- cluster2_favo_rating$gross 
+X.cluster2_favo <- model.matrix(gross~., data=cluster2_favo_rating)[, -1]
+colnames(X.cluster2_favo)
+```
+
+
+```{r}
+matrix.cluster2_favo <- data.frame(gross = Y.cluster2_favo, X.cluster2_favo)
+```
+
+```{r}
+fit.lasso.lambda_favo_c2 <- glmnet(X.cluster2_favo, Y.cluster2_favo, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_favo_c2)  
+fit.lasso.lambda_favo_c2$lambda 
+fit.lasso.lambda_favo_c2$a0    
+```
+
+
+
+```{r}
+set.seed(10) 
+fit.cluster_2.lasso.cv_favo_c2 <- cv.glmnet(X.cluster2_favo, Y.cluster2_favo, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_2.lasso.cv_favo_c2$cvm             
+fit.cluster_2.lasso.cv_favo_c2$lambda.min        
+fit.cluster_2.lasso.cv_favo_c2 $nzero           
+```
+
+```{r}
+coef.min_favo_c2 <- coef(fit.cluster_2.lasso.cv_favo_c2, s="lambda.min")  
+coef.min_favo_c2 <- coef.min_favo_c2[which(coef.min_favo_c2 !=0),]   
+coef.min_favo_c2  
+```
+
+
+```{r}
+coef.1se_favo_c2 <- coef(fit.cluster_2.lasso.cv_favo_c2, s="lambda.1se")  
+coef.1se_favo_c2<- coef.1se_favo_c2[which(coef.1se_favo_c2 !=0),] 
+coef.1se_favo_c2
+```
+
+final model LASSO
+```{r}
+coef.min_favo_c2 <- coef(fit.cluster_2.lasso.cv_favo_c2, s="lambda.min")  
+coef.min_favo_c2 <- coef.min_favo_c2[which(coef.min_favo_c2 !=0),]  
+var.min_favo_c2 <- rownames(as.matrix(coef.min_favo_c2))
+lm.input_favo_c2 <- as.formula(paste("gross", "~", paste(var.min_favo_c2[-1], collapse = "+")))
+lm.input_favo_c2
+```
+
+```{r}
+fit.min.lm_favo_c2 <- lm(lm.input_favo_c2, data=matrix.cluster2_favo)
+lm.output_favo_c2 <- coef(fit.min.lm_favo_c2)
+summary(fit.min.lm_favo_c2) 
+```
+
+
+##Cluster 3
+#data preprocess
+```{r}
+blueprint <- recipe(gross ~ ., data = cluster3) %>% 
+  step_nzv(all_predictors()) %>%
+  step_log(all_numeric(), base = 10,offset=7) %>% # normalize to resolve numeric feature skewness
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes())
+```
+
+```{r}
+prep <- prep(blueprint, training = cluster3)
+cluster3<-bake(prep,new_data=cluster3)
+```
+
+```{r}
+dim(cluster3)
+str(cluster3)
+```
+
+
+#cluster3 interation time linear regression
+```{r}
+cluster3_interation_time<-cluster3%>%
+  select(gross,avg_like_cnt_t1,avg_like_cnt_t2,avg_like_cnt_t3,avg_com_cnt_t1,avg_com_cnt_t2,avg_com_cnt_t3,avg_share_cnt_t1,avg_share_cnt_t2,avg_share_cnt_t3)
+```
+
+```{r}
+cluster_3_interation_time_linear<- lm(gross ~., data=cluster3_interation_time)
+summary(cluster_3_interation_time_linear)
+```
+
+#cluster3 interation time lasso regression
+```{r}
+Y.cluster3 <- cluster3_interation_time$gross 
+X.cluster3 <- model.matrix(gross~., data=cluster3_interation_time)[, -1]
+colnames(X.cluster3)
+```
+
+```{r}
+matrix.cluster3 <- data.frame(gross = Y.cluster3, X.cluster3)
+```
+
+```{r}
+fit.lasso.lambda_c3<- glmnet(X.cluster3, Y.cluster3, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_c3)  
+fit.lasso.lambda_c3$lambda 
+fit.lasso.lambda_c3$a0   
+```
+
+```{r}
+fit.lasso.lambda_c3$df   
+```
+
+```{r}
+fit.cluster_3.lasso_c3 <- glmnet(X.cluster3, Y.cluster3, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_3.lasso_c3$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_c3 <- cv.glmnet(X.cluster3, Y.cluster3, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_c3 $cvm              
+fit.cluster_3.lasso.cv_c3 $lambda.min       
+fit.cluster_3.lasso.cv_c3 $nzero            
+```
+
+```{r}
+coef.min_c3 <- coef(fit.cluster_3.lasso.cv_c3, s="lambda.min")  
+coef.min_c3 <- coef.min_c3[which(coef.min_c3 !=0),]   
+coef.min_c3 
+```
+
+
+```{r}
+coef.1se_c3 <- coef(fit.cluster_3.lasso.cv_c3, s="lambda.1se")  
+coef.1se_c3 <- coef.1se_c3[which(coef.1se_c3 !=0),] 
+coef.1se_c3
+```
+
+```{r}
+coef.nzero_c3 <- coef(fit.cluster_3.lasso.cv_c3, s = fit.cluster_3.lasso.cv_c3$lambda[fit.cluster_3.lasso.cv_c3$nzero==5])[,1]
+coef.nzero_c3 <- coef.nzero_c3[which(coef.nzero_c3 !=0)]
+coef.nzero_c3
+```
+
+final model LASSO
+```{r}
+coef.min_c3 <- coef(fit.cluster_3.lasso.cv_c3, s="lambda.min") 
+coef.min_c3 <- coef.min_c3[which(coef.min_c3 !=0),]   
+var.min_c3 <- rownames(as.matrix(coef.min_c3)) 
+lm.input_c3 <- as.formula(paste("gross", "~", paste(var.min_c3[-1], collapse = "+"))) 
+lm.input_c3
+```
+
+```{r}
+fit.min.lm_c3 <- lm(lm.input_c3, data=matrix.cluster3)
+lm.output_c3 <- coef(fit.min.lm_c3) # output lm estimates
+summary(fit.min.lm_c3) 
+```
+
+#cluster3 like time linear regression
+```{r}
+cluster3_like_time<-cluster3%>%
+  select(gross,avg_like_cnt_t1,avg_like_cnt_t2,avg_like_cnt_t3)
+```
+
+```{r}
+cluster3_like_time_linear<- lm(gross ~., data=cluster3_like_time)
+summary(cluster3_like_time_linear)
+```
+
+#cluster3 like time lasso regression
+```{r}
+Y.cluster3_like <- cluster3_like_time$gross 
+X.cluster3_like <- model.matrix(gross~., data=cluster3_like_time)[, -1]
+colnames(X.cluster3_like)
+```
+
+```{r}
+matrix.cluster3_like <- data.frame(gross = Y.cluster3_like, X.cluster3_like)
+```
+
+```{r}
+fit.lasso.lambda_like_c3 <- glmnet(X.cluster3_like, Y.cluster3_like, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_like_c3)  
+fit.lasso.lambda_like_c3$lambda 
+fit.lasso.lambda_like_c3$a0   
+```
+
+```{r}
+fit.lasso.lambda_like_c3$df    
+```
+
+```{r}
+fit.cluster_1.lasso_like_c3 <- glmnet(X.cluster3_like, Y.cluster3_like, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_1.lasso_like_c3$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_like <- cv.glmnet(X.cluster3_like, Y.cluster3_like, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_like $cvm          
+fit.cluster_3.lasso.cv_like $lambda.min    
+fit.cluster_3.lasso.cv_like $nzero            
+```
+
+```{r}
+coef.min_like_c3 <- coef(fit.cluster_3.lasso.cv_like, s="lambda.min")  
+coef.min_like_c3 <- coef.min_like_c3[which(coef.min_like_c3 !=0),]   
+coef.min_like_c3
+```
+
+
+```{r}
+coef.1se_like_c3 <- coef(fit.cluster_3.lasso.cv_like, s="lambda.1se")  
+coef.1se_like_c3 <- coef.1se_like_c3[which(coef.1se_like_c3 !=0),] 
+coef.1se_like_c3
+```
+
+```{r}
+coef.min_like_c3 <- coef(fit.cluster_3.lasso.cv_like, s="lambda.min")  
+coef.min_like_c3 <- coef.min_like_c3[which(coef.min_like_c3 !=0),]  
+var.min_like_c3<- rownames(as.matrix(coef.min_like_c3)) 
+lm.input_like_c3 <- as.formula(paste("gross", "~", paste(var.min_like_c3[-1], collapse = "+"))) 
+lm.input_like_c3
+```
+
+```{r}
+fit.min.lm_like_c3 <- lm(lm.input_like_c3, data=matrix.cluster3_like)
+lm.output_like_c3 <- coef(fit.min.lm_like_c3) 
+summary(fit.min.lm_like_c3) 
+```
+
+#cluster3 comment time linear regression
+```{r}
+cluster3_comment_time<-cluster3%>%
+  select(gross,avg_com_cnt_t1,avg_com_cnt_t2,avg_com_cnt_t3)
+```
+
+```{r}
+cluster3_comment_time_linear<- lm(gross ~., data=cluster3_comment_time)
+summary(cluster3_comment_time_linear)
+```
+
+#cluster3 comment time lasso regression
+```{r}
+Y.cluster3_comment <- cluster3_comment_time$gross 
+X.cluster3_comment <- model.matrix(gross~., data=cluster3_comment_time)[, -1]
+colnames(X.cluster3_comment)
+```
+
+```{r}
+matrix.cluster3_comment <- data.frame(gross = Y.cluster3_comment, X.cluster3_comment)
+```
+
+```{r}
+fit.lasso.lambda_comment_c3 <- glmnet(X.cluster3_comment, Y.cluster3_comment, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_comment_c3)  
+fit.lasso.lambda_comment_c3$lambda 
+fit.lasso.lambda_comment_c3$a0   
+```
+
+```{r}
+fit.lasso.lambda_comment_c3$df    
+```
+
+```{r}
+fit.cluster_3.lasso_comment <- glmnet(X.cluster3_comment, Y.cluster3_comment, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_3.lasso_comment$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_comment <- cv.glmnet(X.cluster3_comment, Y.cluster3_comment, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_comment $cvm          
+fit.cluster_3.lasso.cv_comment $lambda.min    
+fit.cluster_3.lasso.cv_comment $nzero            
+```
+
+```{r}
+coef.min_comment_c3 <- coef(fit.cluster_3.lasso.cv_comment, s="lambda.min")  
+coef.min_comment_c3 <- coef.min_comment_c3[which(coef.min_comment_c3 !=0),]   
+coef.min_comment_c3
+```
+
+
+```{r}
+coef.1se_comment_c3 <- coef(fit.cluster_3.lasso.cv_comment, s="lambda.1se")  
+coef.1se_comment_c3 <- coef.1se_comment_c3[which(coef.1se_comment_c3 !=0),] 
+coef.1se_comment_c3
+```
+
+final model LASSO
+```{r}
+coef.min_comment_c3 <- coef(fit.cluster_3.lasso.cv_comment, s="lambda.min")  
+coef.min_comment_c3 <- coef.min_comment_c3[which(coef.min_comment_c3 !=0),]  
+var.min_comment_c3 <- rownames(as.matrix(coef.min_comment_c3)) 
+lm.input_comment_c3<- as.formula(paste("gross", "~", paste(var.min_comment_c3[-1], collapse = "+"))) 
+lm.input_comment_c3
+```
+
+
+```{r}
+fit.min.lm_comment_c3 <- lm(lm.input_comment_c3, data=matrix.cluster3_comment)
+lm.output_comment_c3 <- coef(fit.min.lm_comment_c3) 
+summary(fit.min.lm_comment_c3) 
+```
+
+#cluster3 share time linear regression
+```{r}
+cluster3_share_time<-cluster3%>%
+  select(gross,avg_share_cnt_t1,avg_share_cnt_t2,avg_share_cnt_t3)
+```
+
+```{r}
+cluster3_share_time_linear<- lm(gross ~., data=cluster3_share_time)
+summary(cluster3_share_time_linear)
+```
+
+
+#cluster3 share time lasso regression
+```{r}
+Y.cluster3_share <- cluster3_share_time$gross 
+X.cluster3_share <- model.matrix(gross~., data=cluster3_share_time)[, -1]
+colnames(X.cluster3_share)
+```
+
+```{r}
+matrix.cluster3_share <- data.frame(gross = Y.cluster3_share, X.cluster3_share)
+```
+
+```{r}
+fit.lasso.lambda_3_share <- glmnet(X.cluster3_share, Y.cluster3_share, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_3_share)  
+fit.lasso.lambda_3_share$lambda 
+fit.lasso.lambda_3_share$a0   
+```
+
+```{r}
+fit.lasso.lambda_3_share$df    
+```
+
+```{r}
+fit.cluster_3.lasso_share <- glmnet(X.cluster3_share, Y.cluster3_share, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_3.lasso_share$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_share <- cv.glmnet(X.cluster3_share, Y.cluster3_share, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_share $cvm          
+fit.cluster_3.lasso.cv_share $lambda.min    
+fit.cluster_3.lasso.cv_share $nzero            
+```
+
+```{r}
+coef.min_3_share <- coef(fit.cluster_3.lasso.cv_share, s="lambda.min")  
+coef.min_3_share <- coef.min_3_share[which(coef.min_3_share !=0),]   
+coef.min_3_share
+```
+
+
+```{r}
+coef.1se_3_share <- coef(fit.cluster_3.lasso.cv_share, s="lambda.1se")  
+coef.1se_3_share <- coef.1se_3_share[which(coef.1se_3_share !=0),] 
+coef.1se_3_share
+```
+
+final model LASSO
+```{r}
+coef.min_3_share <- coef(fit.cluster_3.lasso.cv_share, s="lambda.min")  
+coef.min_3_share <- coef.min_3_share[which(coef.min_3_share !=0),]  
+var.min_3_share <- rownames(as.matrix(coef.min_3_share)) 
+lm.input_3_share <- as.formula(paste("gross", "~", paste(var.min_3_share[-1], collapse = "+"))) 
+lm.input_3_share
+```
+
+
+```{r}
+fit.min.lm_3_share <- lm(lm.input_3_share, data=matrix.cluster3_share)
+lm.output_3_share <- coef(fit.min.lm_3_share) 
+summary(fit.min.lm_3_share) 
+```
+
+#cluster3 t1 like comment share linear regression
+```{r}
+cluster3_t1_time<-cluster3%>%
+  select(gross,avg_like_cnt_t1,avg_com_cnt_t1,avg_share_cnt_t1)
+```
+
+```{r}
+cluster3_t1_time_linear<- lm(gross ~., data=cluster3_t1_time)
+summary(cluster3_t1_time_linear)
+```
+
+#cluster3 t1 like comment share lasso regression
+```{r}
+Y.cluster3_t1 <- cluster3_t1_time$gross 
+X.cluster3_t1 <- model.matrix(gross~., data=cluster3_t1_time)[, -1]
+colnames(X.cluster3_t1)
+```
+
+```{r}
+matrix.cluster3_t1 <- data.frame(gross = Y.cluster3_t1, X.cluster3_t1)
+```
+
+```{r}
+fit.lasso.lambda_3_t1 <- glmnet(X.cluster3_t1, Y.cluster3_t1, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_3_t1)  
+fit.lasso.lambda_3_t1$lambda 
+fit.lasso.lambda_3_t1$a0   
+```
+
+```{r}
+fit.lasso.lambda_3_t1$df    
+```
+
+```{r}
+fit.cluster_3.lasso_t1 <- glmnet(X.cluster3_t1, Y.cluster3_t1, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_3.lasso_t1$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_t1 <- cv.glmnet(X.cluster3_t1, Y.cluster3_t1, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_t1 $cvm          
+fit.cluster_3.lasso.cv_t1 $lambda.min    
+fit.cluster_3.lasso.cv_t1 $nzero            
+```
+
+```{r}
+coef.min_3_t1 <- coef(fit.cluster_3.lasso.cv_t1, s="lambda.min")  
+coef.min_3_t1 <- coef.min_3_t1[which(coef.min_3_t1 !=0),]   
+coef.min_3_t1
+```
+
+
+```{r}
+coef.1se_3_t1 <- coef(fit.cluster_3.lasso.cv_t1, s="lambda.1se")  
+coef.1se_3_t1 <- coef.1se_3_t1[which(coef.1se_3_t1 !=0),] 
+coef.1se_3_t1
+```
+
+final model LASSO
+```{r}
+coef.min_3_t1 <- coef(fit.cluster_3.lasso.cv_t1, s="lambda.min")  
+coef.min_3_t1 <- coef.min_3_t1[which(coef.min_3_t1 !=0),]  
+var.min_3_t1 <- rownames(as.matrix(coef.min_3_t1)) 
+lm.input_3_t1 <- as.formula(paste("gross", "~", paste(var.min_3_t1[-1], collapse = "+"))) 
+lm.input_3_t1
+```
+
+
+```{r}
+fit.min.lm_3_t1 <- lm(lm.input_3_t1, data=matrix.cluster3_t1)
+lm.output_3_t1 <- coef(fit.min.lm_3_t1) 
+summary(fit.min.lm_3_t1) 
+```
+
+#cluster3 t2 like comment share linear regression
+```{r}
+cluster3_t2_time<-cluster3%>%
+  select(gross,avg_like_cnt_t2,avg_com_cnt_t2,avg_share_cnt_t2)
+```
+
+```{r}
+cluster3_t2_time_linear<- lm(gross ~., data=cluster3_t2_time)
+summary(cluster3_t2_time_linear)
+```
+
+#cluster3 t2 like comment share lasso regression
+```{r}
+Y.cluster3_t2 <- cluster3_t2_time$gross 
+X.cluster3_t2 <- model.matrix(gross~., data=cluster3_t2_time)[, -1]
+colnames(X.cluster3_t2)
+```
+
+```{r}
+matrix.cluster3_t2 <- data.frame(gross = Y.cluster3_t2, X.cluster3_t2)
+```
+
+```{r}
+fit.lasso.lambda_3_t2 <- glmnet(X.cluster3_t2, Y.cluster3_t2, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_3_t2)  
+fit.lasso.lambda_3_t2$lambda 
+fit.lasso.lambda_3_t2$a0   
+```
+
+```{r}
+fit.lasso.lambda_3_t2$df    
+```
+
+```{r}
+fit.cluster_3.lasso_t2 <- glmnet(X.cluster3_t2, Y.cluster3_t2, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_3.lasso_t2$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_t2 <- cv.glmnet(X.cluster3_t2, Y.cluster3_t2, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_t2 $cvm          
+fit.cluster_3.lasso.cv_t2 $lambda.min    
+fit.cluster_3.lasso.cv_t2 $nzero            
+```
+
+```{r}
+coef.min_3_t2 <- coef(fit.cluster_3.lasso.cv_t2, s="lambda.min")  
+coef.min_3_t2 <- coef.min_3_t2[which(coef.min_3_t2 !=0),]   
+coef.min_3_t2
+```
+
+
+```{r}
+coef.1se_3_t2 <- coef(fit.cluster_3.lasso.cv_t2, s="lambda.1se")  
+coef.1se_3_t2 <- coef.1se_3_t2[which(coef.1se_3_t2 !=0),] 
+coef.1se_3_t2
+```
+
+final model LASSO
+```{r}
+coef.min_3_t2 <- coef(fit.cluster_3.lasso.cv_t2, s="lambda.min")  
+coef.min_3_t2 <- coef.min_3_t2[which(coef.min_3_t2 !=0),]  
+var.min_3_t2 <- rownames(as.matrix(coef.min_3_t2)) 
+lm.input_3_t2 <- as.formula(paste("gross", "~", paste(var.min_3_t2[-1], collapse = "+"))) 
+lm.input_3_t2
+```
+
+
+```{r}
+fit.min.lm_3_t2 <- lm(lm.input_3_t2, data=matrix.cluster3_t2)
+lm.output_3_t2 <- coef(fit.min.lm_3_t2) 
+summary(fit.min.lm_3_t2) 
+```
+
+#cluster3 t3 like comment share linear regression
+```{r}
+cluster3_t3_time<-cluster3%>%
+  select(gross,avg_like_cnt_t3,avg_com_cnt_t3,avg_share_cnt_t3)
+```
+
+```{r}
+cluster3_t3_time_linear<- lm(gross ~., data=cluster3_t3_time)
+summary(cluster3_t3_time_linear)
+```
+
+#cluster3 t3 like comment share lasso regression
+```{r}
+Y.cluster3_t3 <- cluster3_t3_time$gross 
+X.cluster3_t3 <- model.matrix(gross~., data=cluster3_t3_time)[, -1]
+colnames(X.cluster3_t3)
+```
+
+```{r}
+matrix.cluster3_t3 <- data.frame(gross = Y.cluster3_t3, X.cluster3_t3)
+```
+
+```{r}
+fit.lasso.lambda_3_t3 <- glmnet(X.cluster3_t3, Y.cluster3_t3, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_3_t3)  
+fit.lasso.lambda_3_t3$lambda 
+fit.lasso.lambda_3_t3$a0   
+```
+
+```{r}
+fit.lasso.lambda_3_t3$df    
+```
+
+```{r}
+fit.cluster_3.lasso_t3 <- glmnet(X.cluster3_t3, Y.cluster3_t3, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_3.lasso_t3$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_t3 <- cv.glmnet(X.cluster3_t3, Y.cluster3_t3, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_t3 $cvm          
+fit.cluster_3.lasso.cv_t3 $lambda.min    
+fit.cluster_3.lasso.cv_t3 $nzero            
+```
+
+```{r}
+coef.min_3_t3 <- coef(fit.cluster_3.lasso.cv_t3, s="lambda.min")  
+coef.min_3_t3 <- coef.min_3_t3[which(coef.min_3_t3 !=0),]   
+coef.min_3_t3
+```
+
+
+```{r}
+coef.1se_3_t3 <- coef(fit.cluster_3.lasso.cv_t3, s="lambda.1se")  
+coef.1se_3_t3 <- coef.1se_3_t3[which(coef.1se_3_t3 !=0),] 
+coef.1se_3_t3
+```
+
+final model LASSO
+```{r}
+coef.min_3_t3 <- coef(fit.cluster_3.lasso.cv_t3, s="lambda.min")  
+coef.min_3_t3 <- coef.min_3_t3[which(coef.min_3_t3 !=0),]  
+var.min_3_t3 <- rownames(as.matrix(coef.min_3_t3)) 
+lm.input_3_t3 <- as.formula(paste("gross", "~", paste(var.min_3_t3[-1], collapse = "+"))) 
+lm.input_3_t3
+```
+
+
+```{r}
+fit.min.lm_3_t3 <- lm(lm.input_3_t3, data=matrix.cluster3_t3)
+lm.output_3_t3 <- coef(fit.min.lm_3_t3) 
+summary(fit.min.lm_3_t3) 
+```
+
+#cluster3 interation all linear regression
+```{r}
+cluster3_interation_all<-cluster3%>%
+  select(gross,avg_like_cnt,avg_com_cnt,avg_share_cnt)
+```
+
+```{r}
+cluster_3_interation_all_linear<- lm(gross ~., data=cluster3_interation_all)
+summary(cluster_3_interation_all_linear)
+```
+
+#cluster3 interation all lasso regression
+```{r}
+Y.cluster3_all <- cluster3_interation_all$gross 
+X.cluster3_all <- model.matrix(gross~., data=cluster3_interation_all)[, -1]
+colnames(X.cluster3_all)
+```
+
+```{r}
+matrix.cluster3_all <- data.frame(gross = Y.cluster3_all, X.cluster3_all)
+```
+
+```{r}
+fit.lasso.lambda_all_c3 <- glmnet(X.cluster3_all, Y.cluster3_all, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_all_c3)  
+fit.lasso.lambda_all_c3$lambda 
+fit.lasso.lambda_all_c3$a0   
+```
+
+```{r}
+fit.lasso.lambda_all_c3$df   
+```
+
+```{r}
+fit.cluster_3.lasso_all_c3 <- glmnet(X.cluster3_all, Y.cluster3_all, alpha=1, 
+                        lambda = 10^seq(-3,0,length=100))
+fit.cluster_3.lasso_all_c3$lambda 
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_all_c3 <- cv.glmnet(X.cluster3_all, Y.cluster3_all, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_all_c3$cvm               
+fit.cluster_3.lasso.cv_all_c3$lambda.min        
+fit.cluster_3.lasso.cv_all_c3 $nzero            
+```
+
+```{r}
+coef.min_all_c3 <- coef(fit.cluster_3.lasso.cv_all_c3, s="lambda.min")  
+coef.min_all_c3 <- coef.min_all_c3[which(coef.min_all_c3 !=0),]   
+coef.min_all_c3  
+```
+
+
+```{r}
+coef.1se_all_c3 <- coef(fit.cluster_3.lasso.cv_all_c3, s="lambda.1se")  
+coef.1se_all_c3<- coef.1se_all_c3[which(coef.1se_all_c3 !=0),] 
+coef.1se_all_c3
+```
+
+final model LASSO
+```{r}
+coef.min_all_c3 <- coef(fit.cluster_3.lasso.cv_all_c3, s="lambda.min")  
+coef.min_all_c3 <- coef.min_all_c3[which(coef.min_all_c3 !=0),]   
+var.min_all_c3 <- rownames(as.matrix(coef.min_all_c3)) 
+lm.input_all_c3 <- as.formula(paste("gross", "~", paste(var.min_all_c3[-1], collapse = "+"))) 
+lm.input_all_c3
+```
+
+```{r}
+fit.min.lm_all_c3 <- lm(lm.input_all_c3, data=matrix.cluster3_all)
+lm.output_all_c3 <- coef(fit.min.lm_all_c3) # output lm estimates
+summary(fit.min.lm_all_c3) 
+```
+
+#cluster3 Favorable rating linear regression
+```{r}
+cluster3_favorable_rating<-cluster3%>%
+  select(gross,avg_sen_score,avg_sen_score_2,avg_sen_score_3,pos_rate,neg_rate)
+```
+
+```{r}
+cluster3_favorable_rating_linear<- lm(gross ~., data=cluster3_favorable_rating)
+summary(cluster3_favorable_rating_linear)
+```
+
+#cluster3 Favorable rating lasso regression
+```{r}
+Y.cluster3_fav <- cluster3_favorable_rating$gross 
+X.cluster3_fav <- model.matrix(gross~., data=cluster3_favorable_rating)[, -1]
+colnames(X.cluster3_fav)
+```
+
+
+```{r}
+matrix.cluster3_fav <- data.frame(gross = Y.cluster3_fav, X.cluster3_fav)
+```
+
+```{r}
+fit.lasso.lambda_fav_c3 <- glmnet(X.cluster3_fav, Y.cluster3_fav, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_fav_c3)  
+fit.lasso.lambda_fav_c3$lambda 
+fit.lasso.lambda_fav_c3$a0    
+```
+
+
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_fav_c3 <- cv.glmnet(X.cluster3_fav, Y.cluster3_fav, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_fav_c3$cvm              
+fit.cluster_3.lasso.cv_fav_c3$lambda.min        
+fit.cluster_3.lasso.cv_fav_c3 $nzero             
+```
+
+```{r}
+coef.min_fav_c3 <- coef(fit.cluster_3.lasso.cv_fav_c3, s="lambda.min")  
+coef.min_fav_c3 <- coef.min_fav_c3[which(coef.min_fav_c3 !=0),]   
+coef.min_fav_c3  
+```
+
+
+```{r}
+coef.1se_fav_c3 <- coef(fit.cluster_3.lasso.cv_fav_c3, s="lambda.1se")  
+coef.1se_fav_c3<- coef.1se_fav_c3[which(coef.1se_fav_c3 !=0),] 
+coef.1se_fav_c3
+```
+
+final model LASSO
+```{r}
+coef.min_fav_c3 <- coef(fit.cluster_3.lasso.cv_fav_c3, s="lambda.min")  
+coef.min_fav_c3 <- coef.min_fav_c3[which(coef.min_fav_c3!=0),]  
+var.min_fav_c3 <- rownames(as.matrix(coef.min_fav_c3)) 
+lm.input_fav_c3 <- as.formula(paste("gross", "~", paste(var.min_fav_c3[-1], collapse = "+"))) 
+lm.input_fav_c3
+```
+
+```{r}
+fit.min.lm_fav_c3 <- lm(lm.input_fav_c3, data=matrix.cluster3_fav)
+lm.output_fav_c3 <- coef(fit.min.lm_fav_c3) 
+summary(fit.min.lm_fav_c3) 
+```
+
+#cluster3 Favo rating linear regression
+```{r}
+cluster3_favo_rating<-cluster3%>%
+  select(gross,avg_sen_score,avg_sen_score_2,avg_sen_score_3,pos_rate)
+```
+
+```{r}
+cluster3_favo_rating_linear<- lm(gross ~., data=cluster3_favo_rating)
+summary(cluster3_favo_rating_linear)
+```
+
+#cluster3 Favorable rating lasso regression
+```{r}
+Y.cluster3_favo <- cluster3_favo_rating$gross 
+X.cluster3_favo <- model.matrix(gross~., data=cluster3_favo_rating)[, -1]
+colnames(X.cluster3_favo)
+```
+
+
+```{r}
+matrix.cluster3_favo <- data.frame(gross = Y.cluster3_favo, X.cluster3_favo)
+```
+
+```{r}
+fit.lasso.lambda_favo_c3 <- glmnet(X.cluster3_favo, Y.cluster3_favo, alpha=1, lambda = 0.1) 
+names(fit.lasso.lambda_favo_c3)  
+fit.lasso.lambda_favo_c3$lambda 
+fit.lasso.lambda_favo_c3$a0    
+```
+
+```{r}
+set.seed(10) 
+fit.cluster_3.lasso.cv_favo_c3 <- cv.glmnet(X.cluster3_favo, Y.cluster3_favo, alpha=1, nfolds=10,
+                        lambda = 10^seq(-3,0,length=100))
+```
+
+```{r}
+fit.cluster_3.lasso.cv_favo_c3$cvm              
+fit.cluster_3.lasso.cv_favo_c3$lambda.min        
+fit.cluster_3.lasso.cv_favo_c3 $nzero             
+```
+
+```{r}
+coef.min_favo_c3 <- coef(fit.cluster_3.lasso.cv_favo_c3, s="lambda.min")  
+coef.min_favo_c3 <- coef.min_favo_c3[which(coef.min_favo_c3 !=0),]   
+coef.min_favo_c3  
+```
+
+
+```{r}
+coef.1se_favo_c3 <- coef(fit.cluster_3.lasso.cv_favo_c3, s="lambda.1se")  
+coef.1se_favo_c3<- coef.1se_favo_c3[which(coef.1se_favo_c3 !=0),] 
+coef.1se_favo_c3
+```
+
+final model LASSO
+```{r}
+coef.min_favo_c3 <- coef(fit.cluster_3.lasso.cv_favo_c3, s="lambda.min")  
+coef.min_favo_c3 <- coef.min_favo_c3[which(coef.min_favo_c3!=0),]  
+var.min_favo_c3 <- rownames(as.matrix(coef.min_favo_c3)) 
+lm.input_favo_c3 <- as.formula(paste("gross", "~", paste(var.min_favo_c3[-1], collapse = "+"))) 
+lm.input_favo_c3
+```
+
+```{r}
+fit.min.lm_favo_c3 <- lm(lm.input_favo_c3, data=matrix.cluster3_favo)
+lm.output_favo_c3 <- coef(fit.min.lm_favo_c3) 
+summary(fit.min.lm_favo_c3) 
+```
